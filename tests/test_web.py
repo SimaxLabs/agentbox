@@ -17,6 +17,7 @@ except ModuleNotFoundError:
 class AiKitWebTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.skills = self.root / "home/opencode/skills"
         self.commands = self.root / "home/opencode/commands"
@@ -50,11 +51,8 @@ class AiKitWebTest(unittest.IsolatedAsyncioTestCase):
         self.client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=self.app), base_url="http://testserver"
         )
+        self.addAsyncCleanup(self.client.aclose)
         self.csrf = self.app.state.runtime.csrf_token
-
-    async def asyncTearDown(self):
-        await self.client.aclose()
-        self.temporary.cleanup()
 
     def add_command(self):
         self.commands.mkdir(parents=True)

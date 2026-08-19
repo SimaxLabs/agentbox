@@ -295,6 +295,10 @@ def hash_path(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _path_matches_fingerprint(path: Path, fingerprint: str) -> bool:
+    return path.exists() and not path.is_symlink() and hash_path(path) == fingerprint
+
+
 def split_frontmatter(content: str) -> tuple[dict[str, str], str]:
     lines = content.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
@@ -664,36 +668,36 @@ def install_staged(staged: Path, destination: Path, token: str) -> None:
         remove_path(previous)
 
 
-def copy_exact(source: Path, destination: Path) -> None:
-    validate_regular_payload(source)
+@contextmanager
+def _staged_destination(destination: Path):
     destination.parent.mkdir(parents=True, exist_ok=True)
     token = uuid.uuid4().hex
     staged = destination.with_name(".{}.ai-kit-new-{}".format(destination.name, token))
     try:
-        if source.is_dir():
-            shutil.copytree(str(source), str(staged), symlinks=False)
-        else:
-            shutil.copy2(str(source), str(staged))
-        install_staged(staged, destination, token)
+        yield staged, token
     finally:
         if staged.exists() or staged.is_symlink():
             remove_path(staged)
 
 
+def copy_exact(source: Path, destination: Path) -> None:
+    validate_regular_payload(source)
+    with _staged_destination(destination) as (staged, token):
+        if source.is_dir():
+            shutil.copytree(str(source), str(staged), symlinks=False)
+        else:
+            shutil.copy2(str(source), str(staged))
+        install_staged(staged, destination, token)
+
+
 def write_generated_skill(content: bytes, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    token = uuid.uuid4().hex
-    staged = destination.with_name(".{}.ai-kit-new-{}".format(destination.name, token))
-    try:
+    with _staged_destination(destination) as (staged, token):
         staged.mkdir(mode=_GENERATED_SKILL_DIRECTORY_MODE)
         staged.chmod(_GENERATED_SKILL_DIRECTORY_MODE)
         skill_file = staged / "SKILL.md"
         skill_file.write_bytes(content)
         skill_file.chmod(_GENERATED_SKILL_FILE_MODE)
         install_staged(staged, destination, token)
-    finally:
-        if staged.exists() or staged.is_symlink():
-            remove_path(staged)
 
 
 def validate_backup_update(
@@ -1011,11 +1015,7 @@ def prepare_portable_restore(
                 "Refusing to replace symlink {} without --force".format(destination)
             )
         candidate_hash = candidate.fingerprint()
-        unchanged = (
-            destination.exists()
-            and not destination.is_symlink()
-            and hash_path(destination) == candidate_hash
-        )
+        unchanged = _path_matches_fingerprint(destination, candidate_hash)
         operations.append((candidate, destination, candidate_hash, unchanged))
     return operations
 
@@ -1161,11 +1161,7 @@ def prepare_exact_restore(
                     )
                 )
             claimed_destinations[destination_key] = str(payload)
-            unchanged = (
-                destination.exists()
-                and not destination.is_symlink()
-                and hash_path(destination) == payload_hash
-            )
+            unchanged = _path_matches_fingerprint(destination, payload_hash)
             operations.append(
                 (
                     entry,
@@ -1470,12 +1466,9 @@ def run_operation(
         else:
             prepared_portable = {}
             for tool_name in selected:
-                if request.source_tool:
-                    source_tools = [request.source_tool]
-                elif request.all_tools:
-                    source_tools = tool_names
-                else:
-                    source_tools = [tool_name]
+                source_tools = (
+                    tool_names if request.all_tools else [request.source_tool or tool_name]
+                )
                 prepared_portable[tool_name] = prepare_portable_restore(
                     config,
                     tool_name,

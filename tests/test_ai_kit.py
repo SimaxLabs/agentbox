@@ -15,6 +15,7 @@ CLI = ROOT / "ai-kit"
 class AiKitTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.paths = {
             "claude_skills": self.root / "home/claude/skills",
@@ -61,9 +62,6 @@ class AiKitTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-
-    def tearDown(self):
-        self.temporary.cleanup()
 
     def tool_config(self, skills_key, commands_key):
         return {

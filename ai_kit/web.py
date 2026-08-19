@@ -566,7 +566,7 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
                     if index >= len(job.events) and not job.done:
                         job.condition.wait(timeout=15)
                     pending = job.events[index:]
-                    finished = job.done and index + len(pending) >= len(job.events)
+                    finished = job.done
                 if not pending:
                     if finished:
                         return
