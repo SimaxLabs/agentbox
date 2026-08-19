@@ -69,6 +69,13 @@ def parse_args(
     status = subparsers.add_parser("status", help="compare tool artifacts with their exact backups")
     status.add_argument("tool", nargs="?", default="all", choices=tool_choices)
 
+    storage = subparsers.add_parser(
+        "storage", help="persist local, managed Git, or dual storage"
+    )
+    storage.add_argument("--local", dest="storage_local", help="local catalog directory")
+    storage.add_argument("--git", dest="storage_git", help="managed Git repository URL")
+    storage.add_argument("--dry-run", action="store_true")
+
     ui = subparsers.add_parser("ui", help="open the local browser interface")
     ui.add_argument("--bind", default="127.0.0.1", choices=["127.0.0.1", "localhost"])
     ui.add_argument("--port", type=int, default=8765)
@@ -102,7 +109,7 @@ def main(
 
     request = OperationRequest(
         action=args.action,
-        tool=args.tool,
+        tool=getattr(args, "tool", "all"),
         host=args.host,
         dry_run=getattr(args, "dry_run", False),
         prune=getattr(args, "prune", False),
@@ -112,6 +119,8 @@ def main(
         all_hosts=getattr(args, "all_hosts", False),
         as_backed_up=getattr(args, "as_backed_up", False),
         force=getattr(args, "force", False),
+        storage_local=getattr(args, "storage_local", None),
+        storage_git=getattr(args, "storage_git", None),
     )
     run_operation(config_path, request)
     return 0

@@ -4,9 +4,9 @@
   <img src="logo.png" alt="AI Kit logo" width="150">
 </p>
 
-AI Kit keeps exact backups of personal skills, commands, and legacy prompts used by AI coding tools. Backups are separated by hostname so multiple teammates can safely share one repository.
+AI Kit keeps exact backups of personal skills, commands, and prompts used by AI coding tools. Backups are separated by hostname so multiple machines can safely share one destination.
 
-The repository is the durable backup. Tool directories are working copies.
+Local folders, managed private Git repositories, or both can hold the durable backup. Tool directories are working copies.
 
 ## Requirements
 
@@ -33,7 +33,6 @@ Preview and create an initial backup:
 ```bash
 ./ai-kit backup all --dry-run
 ./ai-kit backup all
-git diff
 ```
 
 ## User Interface
@@ -64,6 +63,7 @@ The browser interface contains:
 - Per-tool backup status and source availability
 - Searchable catalog artifacts and recorded origins
 - Backup and restore operation builders
+- Persistent local, managed Git, or dual-storage configuration
 - Portable and exact-original restore modes
 - Required dry-run previews
 - Explicit confirmation for writes, pruning, and forced symlink replacement
@@ -86,7 +86,7 @@ The local service uses a per-process CSRF token, trusted-host validation, serial
 
 ### Configuration Selection
 
-The repository launcher prefers the `ai-kit.json` beside the source checkout. Installed commands use `ai-kit.json` from the current directory when available, then fall back to the bundled configuration. The bundled configuration stores its catalog under `~/.local/share/ai-kit/catalog`.
+The repository launcher prefers the `ai-kit.json` beside the source checkout. Installed commands use `ai-kit.json` from the current directory when available, then fall back to the bundled configuration. Both shipped configurations store their local catalog outside the source checkout under `~/.local/share/ai-kit/catalog`.
 
 Select another file explicitly with the existing global option:
 
@@ -121,7 +121,7 @@ Restore the matching tool's artifacts from every backed-up hostname:
 ./ai-kit restore opencode --all-hosts
 ```
 
-Restore exact artifacts without converting commands or legacy prompts:
+Restore exact artifacts without converting commands or prompts:
 
 ```bash
 ./ai-kit restore opencode --as-backed-up
@@ -136,7 +136,7 @@ Check whether working copies differ from their exact backups:
 
 ## Backup Behavior
 
-`backup <tool>` discovers skills and commands in every configured current and legacy source. It stores their bytes, supporting files, relative source locations, and file modes under the detected hostname:
+`backup <tool>` discovers skills and commands in every configured source. It stores their bytes, supporting files, relative source locations, and file modes under the detected hostname:
 
 ```text
 catalog/
@@ -157,7 +157,7 @@ Backup is additive by default. Use `--prune` to remove catalog artifacts that no
 ./ai-kit backup all --prune
 ```
 
-The catalog preserves commands and legacy prompts exactly. Conversion does not happen during backup.
+The catalog preserves commands and prompts exactly. Conversion does not happen during backup.
 
 The hostname comes from `socket.gethostname()`. Override it without changing shared configuration:
 
@@ -165,6 +165,55 @@ The hostname comes from `socket.gethostname()`. Override it without changing sha
 AI_KIT_HOST=alice-work ./ai-kit backup all
 ./ai-kit --host alice-work backup all
 ```
+
+## Storage
+
+Local storage is the default when `storage` is omitted:
+
+```json
+{
+  "storage": {
+    "local": "~/.local/share/ai-kit/catalog"
+  }
+}
+```
+
+Use a managed Git repository by configuring its URL. Git authentication comes from the user's existing SSH configuration, agent, or credential helper; AI Kit does not store credentials:
+
+```json
+{
+  "storage": {
+    "git": "git@github.com:example/private-ai-kit-catalog.git"
+  }
+}
+```
+
+Enable both destinations for two persistent copies:
+
+```json
+{
+  "storage": {
+    "local": "~/Backups/ai-kit-catalog",
+    "git": "git@github.com:example/private-ai-kit-catalog.git"
+  }
+}
+```
+
+Persist the same choices from the CLI, or use the Storage card in the browser interface:
+
+```bash
+./ai-kit storage --local ~/.local/share/ai-kit/catalog
+./ai-kit storage --git git@github.com:example/private-ai-kit-catalog.git
+./ai-kit storage --local ~/Backups/ai-kit-catalog --git git@github.com:example/private-ai-kit-catalog.git
+```
+
+Add `--dry-run` to preview a CLI storage change without updating the configuration file. Supplying only `--local` disables Git; supplying only `--git` disables the configured local copy.
+
+The selected destinations remain active on every operation until their keys are removed from `storage`. Removing a destination does not delete its data.
+
+Git storage requires the `git` executable. AI Kit keeps a URL-keyed managed checkout under `${XDG_DATA_HOME:-~/.local/share}/ai-kit/repositories/`, fetches and fast-forwards it before operations, commits `catalog/` after a successful backup, and pushes without force. A remote race or non-fast-forward update stops the operation so it can be previewed again.
+
+In dual mode, both catalogs must agree before normal operations. If one destination is empty, the next confirmed backup initializes it from the populated destination. If both contain different data, or Git is unavailable, AI Kit stops instead of selecting or overwriting one copy. Dry runs and status may create or fetch the managed checkout, but they do not commit, push, populate the configured local destination, or change tool files.
 
 ## Restore Modes
 
@@ -187,7 +236,7 @@ Selection options:
 - `--all-tools --all-hosts` explicitly restores the complete shared catalog to the target tool.
 
 - Existing skills are copied exactly, including scripts and references.
-- Commands and legacy prompts become `<name>/SKILL.md` packages.
+- Commands and prompts become `<name>/SKILL.md` packages.
 - Conversion keeps `name` and `description`, removes tool-specific command frontmatter, and preserves the prompt body.
 - A short instruction explains that `$ARGUMENTS`, positional arguments, and named placeholders refer to the current user request.
 - Identical outputs with the same skill name are installed once.
@@ -201,7 +250,7 @@ Use `--as-backed-up` to prevent conversion:
 ./ai-kit restore codex --as-backed-up
 ```
 
-This mode only reads the target tool's catalog for the selected hostname. It restores each artifact to the current or legacy source location recorded during backup. The content and kind remain unchanged. `--all-hosts` is supported and stops if host backups disagree about content targeting the same location.
+This mode only reads the target tool's catalog for the selected hostname. It restores each artifact to the source location recorded during backup. The content and kind remain unchanged. `--all-hosts` is supported and stops if host backups disagree about content targeting the same location.
 
 `--from` and `--all-tools` cannot be combined with `--as-backed-up` because exact restoration already uses the target tool's recorded origins.
 
@@ -223,10 +272,12 @@ Backing up an edited derived copy can intentionally create two divergent entries
 - `--dry-run` previews backup and restore operations.
 - Divergent catalog entries stop portable restoration before target files are changed.
 - Existing target artifacts are copied to `~/.local/state/ai-kit/backups/<timestamp>/` before replacement.
+- Managed Git backups are committed and pushed only after catalog preflight succeeds; pushes are never forced.
+- Dual storage stops when its local and Git copies differ or the remote is unavailable.
 - New payloads are staged before they replace an existing catalog or tool artifact.
 - Symlinked target artifacts are not replaced unless `--force` is supplied.
 - Symlinked source artifacts and catalog paths are rejected instead of being followed outside configured roots.
-- A missing current or legacy source keeps its catalog entries and recorded locations, including with `--prune`.
+- A missing configured source keeps its catalog entries and recorded locations, including with `--prune`.
 - A changed artifact shared with an unavailable source is not allowed to overwrite that source's only known backup.
 - Catalog pruning only happens with `backup --prune`.
 - Exact-restore manifest paths are validated to prevent traversal outside configured roots.
@@ -235,11 +286,11 @@ Backing up an edited derived copy can intentionally create two divergent entries
 
 | Tool | Skills | Commands or prompts |
 | --- | --- | --- |
-| Codex | `~/.agents/skills`, plus legacy backup from `~/.codex/skills` | `~/.codex/prompts` (legacy) |
-| Claude Code | `~/.claude/skills` | `~/.claude/commands` (legacy) |
+| Codex | `~/.agents/skills`, plus `~/.codex/skills` | `~/.codex/prompts` |
+| Claude Code | `~/.claude/skills` | `~/.claude/commands` |
 | OpenCode | `~/.config/opencode/skills` | `~/.config/opencode/commands` |
 
-The paths and additional tools are configured in `ai-kit.json`. Every source has a stable ID so exact restoration can map a catalog entry back to the correct current or legacy location without storing machine-specific absolute paths in Git.
+The paths and additional tools are configured in `ai-kit.json`. Every source has a stable ID so exact restoration can map a catalog entry back to the correct location without storing machine-specific absolute paths in Git.
 
 ## Commands
 
@@ -247,6 +298,7 @@ The paths and additional tools are configured in `ai-kit.json`. Every source has
 ./ai-kit [--host hostname] backup <all|tool> [--dry-run] [--prune] [--include-derived]
 ./ai-kit [--host hostname] restore <all|tool> [--dry-run] [--from tool | --all-tools] [--all-hosts] [--as-backed-up] [--force]
 ./ai-kit [--host hostname] status [all|tool]
+./ai-kit storage [--local path] [--git repository-url] [--dry-run]
 ./ai-kit [--host hostname] ui [--port port] [--no-open]
 ```
 

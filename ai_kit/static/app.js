@@ -87,7 +87,11 @@
           var state = panel.querySelector(".running-state");
           state.className = "running-state " + (payload.success ? "finished" : "failed");
           state.textContent = payload.success ? "Complete" : "Stopped";
-          if (payload.success) refreshDashboard(panel.dataset.host);
+          if (payload.success && panel.dataset.reloadPage === "true") {
+            window.location.reload();
+          } else if (payload.success) {
+            refreshDashboard(panel.dataset.host);
+          }
         }
       };
       stream.onerror = function () {

@@ -3,7 +3,7 @@
 
 import ast
 from collections.abc import Callable, Iterable, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 import os
@@ -11,6 +11,7 @@ import re
 import shutil
 import socket
 import stat
+import subprocess
 import tempfile
 import time
 import uuid
@@ -30,6 +31,8 @@ except ImportError:  # pragma: no cover - POSIX has no msvcrt.
 
 
 VERSION = 1
+DEFAULT_LOCAL_CATALOG = "~/.local/share/ai-kit/catalog"
+GIT_TIMEOUT_SECONDS = 120
 _GENERATED_SKILL_DIRECTORY_MODE = 0o755
 _GENERATED_SKILL_FILE_MODE = 0o644
 SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -103,6 +106,26 @@ class OperationRequest:
     all_hosts: bool = False
     as_backed_up: bool = False
     force: bool = False
+    storage_local: str | None = None
+    storage_git: str | None = None
+
+
+@dataclass
+class StorageSession:
+    config: dict
+    local_root: Path | None
+    git_root: Path | None
+    canonical_root: Path
+    initialize: str | None = None
+    git_branch: str | None = None
+    git_revision: str | None = None
+    git_pending: bool = False
+    git_pushed: bool = False
+    git_uncertain: bool = False
+
+    @property
+    def uses_git(self) -> bool:
+        return self.git_root is not None
 
 
 def expand_path(value: str, base: Path) -> Path:
@@ -110,6 +133,86 @@ def expand_path(value: str, base: Path) -> Path:
     if not expanded.is_absolute():
         expanded = base / expanded
     return expanded
+
+
+def user_data_root() -> Path:
+    if os.name == "nt":  # pragma: no cover - exercised on Windows.
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            return Path(local_app_data) / "AI Kit"
+        return Path.home() / "AppData/Local/AI Kit"
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    if xdg_data_home:
+        return Path(os.path.expandvars(os.path.expanduser(xdg_data_home))) / "ai-kit"
+    return Path.home() / ".local/share/ai-kit"
+
+
+def storage_roots(config: dict) -> list[Path]:
+    roots = []
+    if config["_storage_local"] is not None:
+        roots.append(config["_storage_local"])
+    if config["_storage_git_catalog"] is not None:
+        roots.append(config["_storage_git_catalog"])
+    return roots
+
+
+def storage_lock_identities(config: dict) -> list[Path]:
+    identities = []
+    if config["_storage_local"] is not None:
+        identities.append(config["_storage_local"])
+    if config["_storage_git_checkout"] is not None:
+        identities.append(config["_storage_git_checkout"])
+    return identities
+
+
+def git_storage_revision(config: dict) -> str | None:
+    checkout = config["_storage_git_checkout"]
+    url = config["_storage_git_url"]
+    if checkout is None or url is None or not (checkout / ".git").is_dir():
+        return None
+    return _git_revision(checkout, url)
+
+
+def _parse_storage(config: dict, base: Path) -> tuple[Path | None, str | None, Path | None]:
+    if "catalog" in config:
+        raise AiKitError("Use storage.local to configure local catalog storage")
+    storage = config.get("storage")
+    if storage is None:
+        return expand_path(DEFAULT_LOCAL_CATALOG, base), None, None
+    if not isinstance(storage, dict):
+        raise AiKitError("storage must be an object")
+    unknown = set(storage) - {"local", "git"}
+    if unknown:
+        raise AiKitError("Unknown storage option(s): {}".format(", ".join(sorted(unknown))))
+    if not storage:
+        raise AiKitError("storage must enable local, git, or both")
+
+    local_value = storage.get("local")
+    git_url = storage.get("git")
+    if local_value is not None and (
+        not isinstance(local_value, str) or not local_value.strip()
+    ):
+        raise AiKitError("storage.local must be a non-empty path string")
+    if git_url is not None and (not isinstance(git_url, str) or not git_url.strip()):
+        raise AiKitError("storage.git must be a non-empty repository URL")
+    if local_value is None and git_url is None:
+        raise AiKitError("storage must enable local, git, or both")
+    if git_url is not None:
+        if git_url.startswith("-") or any(character in git_url for character in ("\0", "\n", "\r")):
+            raise AiKitError("storage.git contains an unsafe repository URL")
+        credential_url = re.match(
+            r"^[A-Za-z][A-Za-z0-9+.-]*://[^/]*:[^/]*@", git_url
+        ) or re.match(r"^https?://[^/]*@", git_url, re.IGNORECASE)
+        if "?" in git_url or "#" in git_url or credential_url:
+            raise AiKitError(
+                "storage.git must not contain embedded credentials, query parameters, or fragments"
+            )
+        repository_id = hashlib.sha256(git_url.encode("utf-8")).hexdigest()
+        checkout = user_data_root() / "repositories" / repository_id
+    else:
+        checkout = None
+    local_root = expand_path(local_value, base) if local_value is not None else None
+    return local_root, git_url, checkout
 
 
 def load_json(path: Path, default: dict) -> dict:
@@ -122,12 +225,17 @@ def load_json(path: Path, default: dict) -> dict:
 
 
 def write_json(path: Path, value: dict) -> None:
+    existing_mode = None
+    if path.exists() and not path.is_symlink() and path.is_file():
+        existing_mode = stat.S_IMODE(path.stat().st_mode)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name("{}.tmp-{}".format(path.name, uuid.uuid4().hex))
     try:
         temporary.write_text(
             json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
+        if existing_mode is not None:
+            temporary.chmod(existing_mode)
         temporary.replace(path)
     finally:
         if temporary.exists():
@@ -153,11 +261,29 @@ def load_config(path: Path, host_override: str | None = None) -> dict:
     host = re.sub(r"[^A-Za-z0-9._-]+", "-", host).strip(".-_")
     if not host or not CONFIG_NAME.fullmatch(host):
         raise AiKitError("Invalid host namespace: {!r}".format(host))
+    local_root, git_url, git_checkout = _parse_storage(config, base)
+    git_catalog = git_checkout / "catalog" if git_checkout is not None else None
+    catalog_root = git_catalog or local_root
+    if (
+        git_catalog is not None
+        and local_root is not None
+        and not git_catalog.exists()
+        and local_root.exists()
+    ):
+        catalog_root = local_root
+    if catalog_root is None:  # Defensive: _parse_storage requires at least one destination.
+        raise AiKitError("No storage destination is configured")
+    if local_root is not None and local_root.is_symlink():
+        raise AiKitError("Symlinked catalog roots are not supported: {}".format(local_root))
+    if git_catalog is not None and git_catalog.is_symlink():
+        raise AiKitError("Symlinked catalog roots are not supported: {}".format(git_catalog))
     config["_base"] = base
     config["_host"] = host
-    config["_catalog_root"] = expand_path(config.get("catalog", "catalog"), base)
-    if config["_catalog_root"].is_symlink():
-        raise AiKitError("Symlinked catalog roots are not supported: {}".format(config["_catalog_root"]))
+    config["_storage_local"] = local_root
+    config["_storage_git_url"] = git_url
+    config["_storage_git_checkout"] = git_checkout
+    config["_storage_git_catalog"] = git_catalog
+    config["_catalog_root"] = catalog_root
     config["_catalog"] = config["_catalog_root"] / host
     if config["_catalog"].is_symlink():
         raise AiKitError("Symlinked host catalogs are not supported: {}".format(config["_catalog"]))
@@ -222,6 +348,292 @@ def catalog_hosts(config: dict) -> list[str]:
     return hosts
 
 
+def redacted_git_url(url: str) -> str:
+    return re.sub(r"(?<=://)([^/:@]+):[^/@]+@", r"\1:<credentials>@", url)
+
+
+def _git_error_output(result: subprocess.CompletedProcess[str], url: str) -> str:
+    output = (result.stderr or result.stdout or "Git command failed").strip()
+    return output.replace(url, "<repository>")[:2000]
+
+
+def _run_git(
+    checkout: Path | None,
+    arguments: Sequence[str],
+    url: str,
+    allowed: tuple[int, ...] = (0,),
+) -> subprocess.CompletedProcess[str]:
+    command = ["git"]
+    if checkout is not None:
+        command.extend(("-C", str(checkout)))
+    command.extend(arguments)
+    environment = os.environ.copy()
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    environment["GIT_ATTR_NOSYSTEM"] = "1"
+    environment["GIT_CONFIG_COUNT"] = "2"
+    environment["GIT_CONFIG_KEY_0"] = "core.autocrlf"
+    environment["GIT_CONFIG_VALUE_0"] = "false"
+    environment["GIT_CONFIG_KEY_1"] = "core.attributesFile"
+    environment["GIT_CONFIG_VALUE_1"] = os.devnull
+    environment["LC_ALL"] = "C"
+    try:
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=GIT_TIMEOUT_SECONDS,
+            env=environment,
+        )
+    except FileNotFoundError:
+        raise AiKitError("Git storage requires the git executable") from None
+    except subprocess.TimeoutExpired:
+        raise AiKitError("Git storage operation timed out for <repository>") from None
+    except OSError as exc:
+        raise AiKitError("Cannot run Git for <repository>: {}".format(exc)) from exc
+    if result.returncode not in allowed:
+        raise AiKitError(_git_error_output(result, url))
+    return result
+
+
+def _git_ref_exists(checkout: Path, reference: str, url: str) -> bool:
+    result = _run_git(
+        checkout,
+        ("show-ref", "--verify", "--quiet", reference),
+        url,
+        allowed=(0, 1),
+    )
+    return result.returncode == 0
+
+
+def _git_revision(checkout: Path, url: str) -> str | None:
+    result = _run_git(
+        checkout,
+        ("rev-parse", "--verify", "HEAD"),
+        url,
+        allowed=(0, 128),
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _validate_managed_repository(checkout: Path, url: str) -> None:
+    if any(path.is_file() or path.is_symlink() for path in checkout.rglob(".gitattributes")):
+        raise AiKitError("Managed Git repositories must not define .gitattributes files")
+    catalog = checkout / "catalog"
+    if catalog.exists() and any(catalog.rglob(".git")):
+        raise AiKitError("Managed Git catalogs must not contain embedded repositories")
+
+
+def _validate_git_tree(checkout: Path, reference: str, url: str) -> None:
+    tree = _run_git(checkout, ("ls-tree", "-r", reference), url)
+    for line in tree.stdout.splitlines():
+        metadata, _, path = line.partition("\t")
+        mode = metadata.split(" ", 1)[0]
+        parts = Path(path).parts
+        if ".gitattributes" in parts:
+            raise AiKitError("Managed Git repositories must not define .gitattributes files")
+        if mode == "160000" and parts and parts[0] == "catalog":
+            raise AiKitError("Managed Git catalogs must not contain embedded repositories")
+    index = _run_git(checkout, ("ls-files", "--stage", "--", "catalog"), url)
+    if any(line.startswith("160000 ") for line in index.stdout.splitlines()):
+        raise AiKitError("Managed Git catalogs must not contain embedded repositories")
+
+
+def _ensure_git_checkout(config: dict) -> tuple[str, str | None, bool]:
+    checkout = config["_storage_git_checkout"]
+    url = config["_storage_git_url"]
+    if checkout is None or url is None:
+        raise AiKitError("Git storage is not configured")
+    parent = checkout.parent
+    try:
+        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        raise AiKitError("Cannot create managed Git storage: {}".format(exc)) from exc
+    if parent.is_symlink() or not parent.is_dir():
+        raise AiKitError("Managed Git storage root is not a regular directory: {}".format(parent))
+
+    if not checkout.exists():
+        temporary = checkout.with_name(".{}-clone-{}".format(checkout.name, uuid.uuid4().hex))
+        try:
+            _run_git(
+                None,
+                (
+                    "clone",
+                    "--no-local",
+                    "--no-tags",
+                    "--no-checkout",
+                    "--origin",
+                    "origin",
+                    "--",
+                    url,
+                    str(temporary),
+                ),
+                url,
+            )
+            cloned_revision = _git_revision(temporary, url)
+            if cloned_revision is not None:
+                _validate_git_tree(temporary, "HEAD", url)
+                _run_git(temporary, ("read-tree", "--reset", "-u", "HEAD"), url)
+            temporary.rename(checkout)
+        except Exception:
+            if temporary.exists() or temporary.is_symlink():
+                remove_path(temporary)
+            raise
+    if checkout.is_symlink() or not checkout.is_dir():
+        raise AiKitError("Managed Git checkout is not a regular directory: {}".format(checkout))
+    git_directory = checkout / ".git"
+    if git_directory.is_symlink() or not git_directory.is_dir():
+        raise AiKitError("Managed storage is not a Git working tree: {}".format(checkout))
+
+    configured_remote = _run_git(checkout, ("remote", "get-url", "origin"), url).stdout.strip()
+    if configured_remote != url:
+        raise AiKitError("Managed Git checkout origin does not match the configured repository")
+    dirty = _run_git(checkout, ("status", "--porcelain", "--untracked-files=all"), url)
+    if dirty.stdout.strip():
+        raise AiKitError("Managed Git checkout contains uncommitted changes")
+
+    branch = _run_git(checkout, ("symbolic-ref", "--quiet", "--short", "HEAD"), url).stdout.strip()
+    if not branch:
+        raise AiKitError("Managed Git checkout must use an attached branch")
+    _run_git(checkout, ("fetch", "--prune", "origin"), url)
+    remote_ref = "refs/remotes/origin/{}".format(branch)
+    local_revision = _git_revision(checkout, url)
+    pending = False
+    if _git_ref_exists(checkout, remote_ref, url):
+        _validate_git_tree(checkout, remote_ref, url)
+        if local_revision is not None:
+            local_is_ancestor = _run_git(
+                checkout,
+                ("merge-base", "--is-ancestor", "HEAD", remote_ref),
+                url,
+                allowed=(0, 1),
+            )
+            if local_is_ancestor.returncode == 0:
+                _run_git(checkout, ("merge", "--ff-only", "--quiet", remote_ref), url)
+            else:
+                remote_is_ancestor = _run_git(
+                    checkout,
+                    ("merge-base", "--is-ancestor", remote_ref, "HEAD"),
+                    url,
+                    allowed=(0, 1),
+                )
+                if remote_is_ancestor.returncode != 0:
+                    raise AiKitError(
+                        "Managed Git checkout has diverged from origin/{}".format(branch)
+                    )
+                pending = True
+        else:
+            _run_git(checkout, ("update-ref", "refs/heads/{}".format(branch), remote_ref), url)
+            _run_git(checkout, ("read-tree", "--reset", "-u", "HEAD"), url)
+    elif local_revision is not None:
+        pending = True
+    _validate_managed_repository(checkout, url)
+    revision = _git_revision(checkout, url)
+    return branch, revision, pending
+
+
+def catalog_fingerprint(root: Path) -> tuple[bool, str]:
+    if root.is_symlink():
+        raise AiKitError("Symlinked catalog roots are not supported: {}".format(root))
+    if not root.exists():
+        return True, hashlib.sha256(b"").hexdigest()
+    if not root.is_dir():
+        raise AiKitError("Catalog root is not a directory: {}".format(root))
+    entries = sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix())
+    if not entries:
+        return True, hashlib.sha256(b"").hexdigest()
+    digest = hashlib.sha256()
+    for entry in entries:
+        relative = entry.relative_to(root).as_posix()
+        if entry.is_symlink():
+            raise AiKitError("Symlinked catalog paths are not supported: {}".format(entry))
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        if entry.is_dir():
+            digest.update(b"directory\0")
+            continue
+        if not entry.is_file():
+            raise AiKitError("Unsupported catalog path: {}".format(entry))
+        digest.update(b"file\0")
+        digest.update(b"executable\0" if entry.stat().st_mode & 0o111 else b"regular\0")
+        with entry.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return False, digest.hexdigest()
+
+
+def _select_catalog_root(config: dict, root: Path) -> None:
+    config["_catalog_root"] = root
+    config["_catalog"] = root / config["_host"]
+    if config["_catalog"].is_symlink():
+        raise AiKitError("Symlinked host catalogs are not supported: {}".format(config["_catalog"]))
+
+
+def prepare_storage(
+    config: dict,
+    report: Reporter = console_report,
+) -> StorageSession:
+    local_root = config["_storage_local"]
+    git_root = config["_storage_git_catalog"]
+    if git_root is None:
+        if local_root is None:
+            raise AiKitError("No storage destination is configured")
+        _select_catalog_root(config, local_root)
+        return StorageSession(config, local_root, None, local_root)
+
+    branch, revision, pending = _ensure_git_checkout(config)
+    report(
+        OperationEvent(
+            "storage",
+            "GIT READY {}@{}".format(branch, revision[:8] if revision else "empty"),
+        )
+    )
+    if pending:
+        report(OperationEvent("storage", "GIT PENDING COMMIT AWAITS CONFIRMED BACKUP"))
+    if git_root.is_symlink():
+        raise AiKitError("Symlinked catalog roots are not supported: {}".format(git_root))
+    if local_root is None:
+        _select_catalog_root(config, git_root)
+        return StorageSession(
+            config,
+            None,
+            git_root,
+            git_root,
+            git_branch=branch,
+            git_revision=revision,
+            git_pending=pending,
+        )
+
+    local_empty, local_hash = catalog_fingerprint(local_root)
+    git_empty, git_hash = catalog_fingerprint(git_root)
+    initialize = None
+    if not local_empty and not git_empty and local_hash != git_hash:
+        raise AiKitError(
+            "Local and Git catalogs differ; make them equal or deactivate one storage destination"
+        )
+    if not local_empty and git_empty:
+        canonical = local_root
+        initialize = "git-from-local"
+        report(OperationEvent("storage-init", "INITIALIZE GIT STORAGE FROM LOCAL CATALOG"))
+    else:
+        canonical = git_root
+        if local_empty and not git_empty:
+            initialize = "local-from-git"
+            report(OperationEvent("storage-init", "INITIALIZE LOCAL STORAGE FROM GIT CATALOG"))
+    _select_catalog_root(config, canonical)
+    return StorageSession(
+        config,
+        local_root,
+        git_root,
+        canonical,
+        initialize=initialize,
+        git_branch=branch,
+        git_revision=revision,
+        git_pending=pending,
+    )
+
+
 def hash_generated_skill(content: bytes) -> str:
     digest = hashlib.sha256()
     update_hash_entry(digest, ".", "directory", _GENERATED_SKILL_DIRECTORY_MODE, b"")
@@ -257,6 +669,16 @@ def validate_regular_payload(path: Path) -> None:
                 raise AiKitError("Symlinked artifact content is not supported: {}".format(child))
             if not child.is_dir() and not child.is_file():
                 raise AiKitError("Unsupported artifact content: {}".format(child))
+
+
+def validate_git_payload(path: Path) -> None:
+    if path.is_file():
+        if path.name == ".gitattributes":
+            raise AiKitError("Git storage does not support artifact content named {}".format(path))
+        return
+    for child in path.rglob("*"):
+        if child.name in (".git", ".gitattributes"):
+            raise AiKitError("Git storage does not support artifact content named {}".format(child))
 
 
 def hash_path(path: Path) -> str:
@@ -688,6 +1110,200 @@ def copy_exact(source: Path, destination: Path) -> None:
         else:
             shutil.copy2(str(source), str(staged))
         install_staged(staged, destination, token)
+
+
+def replace_catalog(source: Path, destination: Path) -> None:
+    if source.exists():
+        copy_exact(source, destination)
+    elif destination.exists() or destination.is_symlink():
+        remove_path(destination)
+
+
+@contextmanager
+def staged_catalog(source: Path):
+    with tempfile.TemporaryDirectory(prefix="ai-kit-catalog-") as temporary:
+        staged = Path(temporary) / "catalog"
+        if source.exists():
+            copy_exact(source, staged)
+        yield staged
+
+
+@contextmanager
+def optional_catalog_snapshot(source: Path | None):
+    if source is None:
+        yield None, False
+        return
+    existed = source.exists()
+    with staged_catalog(source) as snapshot:
+        yield snapshot, existed
+
+
+def restore_catalog_snapshot(snapshot: Path, existed: bool, destination: Path) -> None:
+    if existed:
+        replace_catalog(snapshot, destination)
+    elif destination.exists() or destination.is_symlink():
+        remove_path(destination)
+
+
+def _rollback_git_checkout(
+    session: StorageSession,
+    snapshot: Path,
+    snapshot_exists: bool,
+    revision: str | None,
+) -> None:
+    checkout = session.config["_storage_git_checkout"]
+    url = session.config["_storage_git_url"]
+    branch = session.git_branch
+    if checkout is None or url is None or branch is None or session.git_root is None:
+        return
+    reference = "refs/heads/{}".format(branch)
+    if revision is None:
+        _run_git(checkout, ("update-ref", "-d", reference), url)
+        _run_git(checkout, ("read-tree", "--empty"), url)
+    else:
+        _run_git(checkout, ("update-ref", reference, revision), url)
+        _run_git(checkout, ("read-tree", "HEAD"), url)
+    if snapshot_exists:
+        replace_catalog(snapshot, session.git_root)
+    elif session.git_root.exists() or session.git_root.is_symlink():
+        remove_path(session.git_root)
+
+
+def commit_git_catalog(
+    session: StorageSession,
+    source: Path,
+    report: Reporter = console_report,
+) -> bool:
+    checkout = session.config["_storage_git_checkout"]
+    url = session.config["_storage_git_url"]
+    branch = session.git_branch
+    git_root = session.git_root
+    if checkout is None or url is None or branch is None or git_root is None:
+        raise AiKitError("Git storage is not prepared")
+    revision = _git_revision(checkout, url)
+    with tempfile.TemporaryDirectory(prefix="ai-kit-git-rollback-") as temporary:
+        snapshot = Path(temporary) / "catalog"
+        snapshot_exists = git_root.exists()
+        if snapshot_exists:
+            copy_exact(git_root, snapshot)
+        pushed = False
+        uncertain = False
+        try:
+            replace_catalog(source, git_root)
+            _validate_managed_repository(checkout, url)
+            _run_git(
+                checkout,
+                (
+                    "-c",
+                    "core.autocrlf=false",
+                    "-c",
+                    "core.attributesFile={}".format(os.devnull),
+                    "add",
+                    "--force",
+                    "--all",
+                    "--",
+                    "catalog",
+                ),
+                url,
+            )
+            staged = _run_git(
+                checkout,
+                ("diff", "--cached", "--quiet", "--", "catalog"),
+                url,
+                allowed=(0, 1),
+            )
+            if staged.returncode == 0:
+                if not session.git_pending:
+                    return False
+                commit = revision
+            else:
+                message = "AI Kit catalog backup {}".format(
+                    datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+                )
+                _run_git(
+                    checkout,
+                    (
+                        "-c",
+                        "user.name=AI Kit",
+                        "-c",
+                        "user.email=ai-kit@localhost",
+                        "-c",
+                        "commit.gpgsign=false",
+                        "commit",
+                        "--quiet",
+                        "-m",
+                        message,
+                        "--",
+                        "catalog",
+                    ),
+                    url,
+                )
+                commit = _git_revision(checkout, url)
+            if commit is None:
+                raise AiKitError("Git did not create a catalog commit")
+            try:
+                _run_git(
+                    checkout,
+                    ("push", "origin", "HEAD:refs/heads/{}".format(branch)),
+                    url,
+                )
+                pushed = True
+            except AiKitError as push_error:
+                remote_ref = "refs/remotes/origin/{}".format(branch)
+                try:
+                    _run_git(checkout, ("fetch", "origin"), url)
+                    contains_commit = False
+                    if _git_ref_exists(checkout, remote_ref, url):
+                        contains_commit = (
+                            _run_git(
+                                checkout,
+                                ("merge-base", "--is-ancestor", commit, remote_ref),
+                                url,
+                                allowed=(0, 1),
+                            ).returncode
+                            == 0
+                        )
+                except AiKitError:
+                    uncertain = True
+                    session.git_uncertain = True
+                    raise AiKitError(
+                        "Git push outcome is uncertain; the managed commit was preserved and "
+                        "will be checked on the next operation"
+                    ) from push_error
+                if not contains_commit:
+                    raise push_error
+                pushed = True
+            session.git_pushed = True
+            session.git_pending = False
+            session.git_revision = commit
+            report(OperationEvent("git-commit", "GIT COMMIT {}".format(commit[:8])))
+            report(OperationEvent("git-push", "GIT PUSH {}".format(branch)))
+            return True
+        except Exception:
+            if not pushed and not uncertain:
+                try:
+                    _rollback_git_checkout(session, snapshot, snapshot_exists, revision)
+                except Exception as rollback_error:
+                    raise AiKitError(
+                        "Git storage failed and its managed checkout could not be restored: {}".format(
+                            rollback_error
+                        )
+                    ) from rollback_error
+            raise
+
+
+def initialize_storage_for_restore(
+    session: StorageSession,
+    report: Reporter = console_report,
+) -> None:
+    if session.initialize == "git-from-local":
+        if session.local_root is None:
+            raise AiKitError("Local storage is unavailable for Git initialization")
+        commit_git_catalog(session, session.local_root, report)
+    elif session.initialize == "local-from-git":
+        if session.local_root is None or session.git_root is None:
+            raise AiKitError("Dual storage is unavailable for local initialization")
+        replace_catalog(session.git_root, session.local_root)
 
 
 def write_generated_skill(content: bytes, destination: Path) -> None:
@@ -1316,9 +1932,8 @@ def status_tool(
 
 
 @contextmanager
-def operation_guard(config_path: Path):
-    """Serialize operations that use the same configuration file."""
-    resolved = config_path.expanduser().resolve()
+def _operation_lock(identity: Path):
+    resolved = identity.expanduser().resolve()
     if hasattr(os, "getuid"):
         lock_root = Path("/tmp") / "ai-kit-locks-{}".format(os.getuid())
     else:  # pragma: no cover - exercised on Windows.
@@ -1362,25 +1977,25 @@ def operation_guard(config_path: Path):
                 msvcrt.locking(lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def run_operation(
-    config_path: Path,
+@contextmanager
+def operation_guard(config_path: Path, *storage_identities: Path):
+    """Serialize operations that share a configuration or storage destination."""
+    identities = sorted(
+        {config_path.expanduser().resolve(), *(item.expanduser().resolve() for item in storage_identities)},
+        key=str,
+    )
+    with ExitStack() as stack:
+        for identity in identities:
+            stack.enter_context(_operation_lock(identity))
+        yield
+
+
+def _run_catalog_operation(
+    config: dict,
     request: OperationRequest,
     report: Reporter = console_report,
-    acquire_lock: bool = True,
     pre_apply: Callable[[], None] | None = None,
 ) -> int:
-    """Run one validated operation and return its change or drift count."""
-    config_path = config_path.expanduser().resolve()
-    if acquire_lock:
-        with operation_guard(config_path):
-            return run_operation(
-                config_path,
-                request,
-                report,
-                acquire_lock=False,
-                pre_apply=pre_apply,
-            )
-    config = load_config(config_path, request.host)
     tool_names = sorted(config["tools"])
     if request.action not in ("backup", "restore", "status"):
         raise AiKitError("Unknown action: {}".format(request.action))
@@ -1417,6 +2032,9 @@ def run_operation(
         if all_errors:
             raise AiKitError("\n".join(all_errors))
         for tool_name, artifacts, available_sources in prepared:
+            if config["_storage_git_url"] is not None:
+                for artifact in artifacts:
+                    validate_git_payload(artifact.payload)
             validate_backup_update(config, tool_name, artifacts, available_sources)
         if pre_apply is not None and not request.dry_run:
             pre_apply()
@@ -1496,3 +2114,170 @@ def run_operation(
     for tool_name in selected:
         total += status_tool(config, tool_name, state, portable_index, report)
     return total
+
+
+def _file_snapshot(path: Path) -> tuple[bool, bytes, int]:
+    if not path.exists():
+        return False, b"", 0
+    if path.is_symlink() or not path.is_file():
+        raise AiKitError("State path is not a regular file: {}".format(path))
+    return True, path.read_bytes(), stat.S_IMODE(path.stat().st_mode)
+
+
+def _restore_file_snapshot(path: Path, snapshot: tuple[bool, bytes, int]) -> None:
+    existed, content, mode = snapshot
+    if not existed:
+        if path.exists() or path.is_symlink():
+            remove_path(path)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name("{}.rollback-{}".format(path.name, uuid.uuid4().hex))
+    try:
+        temporary.write_bytes(content)
+        temporary.chmod(mode)
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _configured_storage_update(config_path: Path, request: OperationRequest) -> dict:
+    storage = {}
+    if request.storage_local is not None:
+        storage["local"] = request.storage_local.strip()
+    if request.storage_git is not None:
+        storage["git"] = request.storage_git.strip()
+    candidate = load_json(config_path, {})
+    candidate["storage"] = storage
+    _parse_storage(candidate, config_path.parent)
+    return candidate
+
+
+def configure_storage(
+    config_path: Path,
+    request: OperationRequest,
+    report: Reporter,
+    pre_plan: Callable[[], None] | None,
+    pre_apply: Callable[[], None] | None,
+) -> int:
+    candidate = _configured_storage_update(config_path, request)
+    current = load_json(config_path, {})
+    if pre_plan is not None:
+        pre_plan()
+    storage = candidate["storage"]
+    if "local" in storage:
+        report(OperationEvent("storage-config", "LOCAL STORAGE {}".format(storage["local"])))
+    else:
+        report(OperationEvent("storage-config", "LOCAL STORAGE DISABLED"))
+    if "git" in storage:
+        report(
+            OperationEvent(
+                "storage-config",
+                "GIT STORAGE {}".format(redacted_git_url(storage["git"])),
+            )
+        )
+    else:
+        report(OperationEvent("storage-config", "GIT STORAGE DISABLED"))
+    if candidate == current:
+        report(OperationEvent("unchanged", "STORAGE CONFIGURATION UNCHANGED"))
+        return 0
+    report(OperationEvent("storage-config", "UPDATE STORAGE CONFIGURATION"))
+    if not request.dry_run:
+        if pre_apply is not None:
+            pre_apply()
+        write_json(config_path, candidate)
+    return 1
+
+
+def run_operation(
+    config_path: Path,
+    request: OperationRequest,
+    report: Reporter = console_report,
+    acquire_lock: bool = True,
+    pre_plan: Callable[[], None] | None = None,
+    pre_apply: Callable[[], None] | None = None,
+) -> int:
+    """Run one validated operation and return its change or drift count."""
+    config_path = config_path.expanduser().resolve()
+    if acquire_lock:
+        preliminary = load_config(config_path, request.host)
+        locked_identities = storage_lock_identities(preliminary)
+        with operation_guard(config_path, *locked_identities):
+            current = load_config(config_path, request.host)
+            if {
+                item.expanduser().resolve() for item in storage_lock_identities(current)
+            } != {item.expanduser().resolve() for item in locked_identities}:
+                raise AiKitError("Storage configuration changed while waiting; retry the operation")
+            return run_operation(
+                config_path,
+                request,
+                report,
+                acquire_lock=False,
+                pre_plan=pre_plan,
+                pre_apply=pre_apply,
+            )
+
+    if request.action == "storage":
+        return configure_storage(config_path, request, report, pre_plan, pre_apply)
+    config = load_config(config_path, request.host)
+    if request.action not in ("backup", "restore", "status"):
+        raise AiKitError("Unknown action: {}".format(request.action))
+    session = prepare_storage(config, report)
+    if pre_plan is not None:
+        pre_plan()
+
+    def apply_with_storage() -> None:
+        if pre_apply is not None:
+            pre_apply()
+        if request.action == "restore" and session.uses_git:
+            initialize_storage_for_restore(session, report)
+
+    if request.action == "backup" and session.uses_git:
+        report(OperationEvent("storage", "GIT BACKUP WILL COMMIT AND PUSH CATALOG CHANGES"))
+        if request.dry_run:
+            return _run_catalog_operation(config, request, report, apply_with_storage)
+        state_snapshot = _file_snapshot(config["_state_file"])
+        with staged_catalog(session.canonical_root) as staged, optional_catalog_snapshot(
+            session.local_root
+        ) as (local_snapshot, local_existed):
+            working_config = dict(config)
+            _select_catalog_root(working_config, staged)
+            local_updated = False
+            try:
+                total = _run_catalog_operation(
+                    working_config, request, report, apply_with_storage
+                )
+                if session.local_root is not None:
+                    local_updated = True
+                    replace_catalog(staged, session.local_root)
+                commit_git_catalog(session, staged, report)
+                return total
+            except Exception as operation_error:
+                rollback_errors = []
+                if (
+                    local_updated
+                    and not session.git_pushed
+                    and not session.git_uncertain
+                    and local_snapshot is not None
+                    and session.local_root is not None
+                ):
+                    try:
+                        restore_catalog_snapshot(
+                            local_snapshot, local_existed, session.local_root
+                        )
+                    except Exception as exc:
+                        rollback_errors.append(exc)
+                if not session.git_pushed and not session.git_uncertain:
+                    try:
+                        _restore_file_snapshot(config["_state_file"], state_snapshot)
+                    except Exception as exc:
+                        rollback_errors.append(exc)
+                if rollback_errors:
+                    raise AiKitError(
+                        "Storage operation failed and rollback was incomplete: {}".format(
+                            "; ".join(str(error) for error in rollback_errors)
+                        )
+                    ) from operation_error
+                raise
+
+    return _run_catalog_operation(config, request, report, apply_with_storage)

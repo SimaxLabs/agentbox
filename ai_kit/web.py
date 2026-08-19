@@ -8,6 +8,7 @@ import secrets
 import threading
 import time
 import webbrowser
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -23,10 +24,14 @@ from .core import (
     OperationEvent,
     OperationRequest,
     catalog_hosts,
+    git_storage_revision,
     load_config,
     load_manifest,
     operation_guard,
+    redacted_git_url,
     run_operation,
+    storage_lock_identities,
+    storage_roots,
 )
 
 
@@ -163,6 +168,18 @@ class WebRuntime:
         hosts.add(config["_host"])
         return config, sorted(hosts)
 
+    @contextmanager
+    def operation_guard(self, host: str | None = None):
+        config = load_config(self.config_path, host or self.host_override)
+        locked_identities = storage_lock_identities(config)
+        with operation_guard(self.config_path, *locked_identities):
+            current = load_config(self.config_path, host or self.host_override)
+            if {
+                item.expanduser().resolve() for item in storage_lock_identities(current)
+            } != {item.expanduser().resolve() for item in locked_identities}:
+                raise AiKitError("Storage configuration changed while waiting; retry the operation")
+            yield
+
     def validate_host(self, host: str) -> str:
         config, hosts = self.available_hosts()
         selected = host or config["_host"]
@@ -174,15 +191,18 @@ class WebRuntime:
         config = load_config(self.config_path, request.host)
         roots = {
             self.config_path,
-            config["_catalog_root"],
             config["_state_file"],
         }
+        roots.update(storage_roots(config))
         for tool in config["tools"].values():
             for section_name in ("skills", "commands"):
                 section = tool[section_name]
                 roots.add(section["_target"])
                 roots.update(source["path"] for source in section["_sources"])
         digest = hashlib.sha256()
+        revision = git_storage_revision(config)
+        digest.update((revision or "no-git-revision").encode("ascii"))
+        digest.update(b"\0")
         for root in sorted(roots, key=lambda item: str(item)):
             update_tree_fingerprint(digest, root)
         return digest.hexdigest()
@@ -191,15 +211,23 @@ class WebRuntime:
         events: list[dict] = []
         preview_request = replace(request, dry_run=True)
         with self.operation_lock:
-            with operation_guard(self.config_path):
-                filesystem_before = self.filesystem_signature(request)
+            with self.operation_guard(request.host):
+                filesystem_before = None
+
+                def capture_filesystem() -> None:
+                    nonlocal filesystem_before
+                    filesystem_before = self.filesystem_signature(request)
+
                 changes = run_operation(
                     self.config_path,
                     preview_request,
                     lambda event: events.append(event_payload(event)),
                     acquire_lock=False,
+                    pre_plan=capture_filesystem,
                 )
                 filesystem = self.filesystem_signature(request)
+                if filesystem_before is None:
+                    raise AiKitError("The operation did not prepare a filesystem preview")
                 if filesystem_before != filesystem:
                     raise AiKitError(
                         "The filesystem changed while building this preview; try again"
@@ -246,16 +274,24 @@ class WebRuntime:
     def _run_job(self, job: OperationJob) -> None:
         try:
             with self.operation_lock:
-                with operation_guard(self.config_path):
+                with self.operation_guard(job.request.host):
                     current_events: list[dict] = []
-                    filesystem_before = self.filesystem_signature(job.request)
+                    filesystem_before = None
+
+                    def capture_filesystem() -> None:
+                        nonlocal filesystem_before
+                        filesystem_before = self.filesystem_signature(job.request)
+
                     current_changes = run_operation(
                         self.config_path,
                         replace(job.request, dry_run=True),
                         lambda event: current_events.append(event_payload(event)),
                         acquire_lock=False,
+                        pre_plan=capture_filesystem,
                     )
                     filesystem = self.filesystem_signature(job.request)
+                    if filesystem_before is None:
+                        raise AiKitError("The operation did not prepare a filesystem confirmation")
                     if filesystem_before != filesystem:
                         raise AiKitError(
                             "The filesystem changed during confirmation; review a new dry run"
@@ -309,63 +345,65 @@ class WebRuntime:
     def dashboard(self, selected_host: str) -> dict:
         events: list[OperationEvent] = []
         with self.operation_lock:
-            run_operation(
-                self.config_path,
-                OperationRequest("status", host=selected_host),
-                events.append,
-            )
-            config = load_config(self.config_path, selected_host)
-            tools = []
-            inventory = []
-            for tool_name in sorted(config["tools"]):
-                manifest = load_manifest(config, tool_name)
-                tool_events = [event for event in events if event.tool == tool_name]
-                kinds = {event.kind for event in tool_events}
-                if kinds.intersection({"unbacked", "different", "conflict"}):
-                    state = "attention"
-                    state_label = "Needs attention"
-                elif "no-sources" in kinds:
-                    state = "offline"
-                    state_label = "Sources unavailable"
-                else:
-                    state = "clean"
-                    state_label = "In sync"
-
-                sources = []
-                for section_name in ("skills", "commands"):
-                    for source in config["tools"][tool_name][section_name]["_sources"]:
-                        sources.append(
-                            {
-                                "id": source["id"],
-                                "kind": section_name,
-                                "path": str(source["path"]),
-                                "available": source["path"].is_dir()
-                                and not source["path"].is_symlink(),
-                            }
-                        )
-                tools.append(
-                    {
-                        "name": tool_name,
-                        "state": state,
-                        "state_label": state_label,
-                        "artifact_count": len(manifest["artifacts"]),
-                        "sources": sources,
-                        "events": [event_payload(event) for event in tool_events],
-                    }
+            with self.operation_guard(selected_host):
+                run_operation(
+                    self.config_path,
+                    OperationRequest("status", host=selected_host),
+                    events.append,
+                    acquire_lock=False,
                 )
-                for artifact in manifest["artifacts"]:
-                    inventory.append(
-                        {
-                            "tool": tool_name,
-                            "kind": artifact["kind"],
-                            "name": artifact["name"],
-                            "path": artifact["path"],
-                            "sources": ", ".join(
-                                source["id"] for source in artifact.get("sources", [])
+                config = load_config(self.config_path, selected_host)
+                tools = []
+                inventory = []
+                for tool_name in sorted(config["tools"]):
+                    manifest = load_manifest(config, tool_name)
+                    tool_events = [event for event in events if event.tool == tool_name]
+                    kinds = {event.kind for event in tool_events}
+                    if kinds.intersection({"unbacked", "different", "conflict"}):
+                        state = "attention"
+                        state_label = "Needs attention"
+                    elif "no-sources" in kinds:
+                        state = "offline"
+                        state_label = "Sources unavailable"
+                    else:
+                        state = "clean"
+                        state_label = "In sync"
+
+                    sources = []
+                    for section_name in ("skills", "commands"):
+                        for source in config["tools"][tool_name][section_name]["_sources"]:
+                            sources.append(
+                                {
+                                    "id": source["id"],
+                                    "kind": section_name,
+                                    "path": str(source["path"]),
+                                    "available": source["path"].is_dir()
+                                    and not source["path"].is_symlink(),
+                                }
                             )
-                            or "catalog",
+                    tools.append(
+                        {
+                            "name": tool_name,
+                            "state": state,
+                            "state_label": state_label,
+                            "artifact_count": len(manifest["artifacts"]),
+                            "sources": sources,
+                            "events": [event_payload(event) for event in tool_events],
                         }
                     )
+                    for artifact in manifest["artifacts"]:
+                        inventory.append(
+                            {
+                                "tool": tool_name,
+                                "kind": artifact["kind"],
+                                "name": artifact["name"],
+                                "path": artifact["path"],
+                                "sources": ", ".join(
+                                    source["id"] for source in artifact.get("sources", [])
+                                )
+                                or "catalog",
+                            }
+                        )
         return {"tools": tools, "inventory": inventory, "config": config}
 
 
@@ -387,8 +425,24 @@ def form_flag(form: object, name: str) -> bool:
 
 def operation_from_form(runtime: WebRuntime, form: object) -> OperationRequest:
     action = str(form.get("action", ""))
+    if action == "storage":
+        config = load_config(runtime.config_path, runtime.host_override)
+        return OperationRequest(
+            "storage",
+            host=config["_host"],
+            storage_local=(
+                str(form.get("storage_local", "")).strip()
+                if form_flag(form, "local_enabled")
+                else None
+            ),
+            storage_git=(
+                str(form.get("storage_git", "")).strip()
+                if form_flag(form, "git_enabled")
+                else None
+            ),
+        )
     if action not in ("backup", "restore"):
-        raise AiKitError("Choose a backup or restore operation")
+        raise AiKitError("Choose a backup, restore, or storage operation")
     tool = str(form.get("tool", "all"))
     selected_host = runtime.validate_host(str(form.get("host", "")))
     if action == "backup":
@@ -423,6 +477,8 @@ def operation_from_form(runtime: WebRuntime, form: object) -> OperationRequest:
 
 
 def operation_label(request: OperationRequest) -> str:
+    if request.action == "storage":
+        return "Update storage configuration"
     target = "every configured tool" if request.tool == "all" else request.tool
     if request.action == "backup":
         return "Back up {}".format(target)
@@ -432,7 +488,7 @@ def operation_label(request: OperationRequest) -> str:
 
 def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
     runtime = WebRuntime(config_path, host_override)
-    initial_config, _ = runtime.available_hosts()
+    initial_config = load_config(runtime.config_path, host_override)
     templates = Jinja2Templates(directory=str(PACKAGE_ROOT / "templates"))
     app = FastAPI(title="AI Kit", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.runtime = runtime
@@ -458,11 +514,26 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
 
     def base_context(request: Request, selected_host: str) -> dict:
         config, hosts = runtime.available_hosts()
+        local_root = config["_storage_local"]
+        git_url = config["_storage_git_url"]
+        form_git_url = redacted_git_url(git_url) if git_url is not None else ""
+        if git_url is not None and form_git_url != git_url:
+            form_git_url = ""
+        if local_root is not None and git_url is not None:
+            storage_label = "Local + Git"
+        elif git_url is not None:
+            storage_label = "Git"
+        else:
+            storage_label = "Local"
         return {
             "request": request,
             "csrf_token": runtime.csrf_token,
             "config_path": str(runtime.config_path),
             "catalog_path": str(config["_catalog_root"]),
+            "storage_label": storage_label,
+            "local_storage_path": str(local_root) if local_root is not None else None,
+            "git_storage_url": redacted_git_url(git_url) if git_url is not None else None,
+            "git_storage_form_url": form_git_url,
             "state_path": str(config["_state_file"]),
             "safety_path": str(config["_safety_backups"]),
             "tool_names": sorted(config["tools"]),
@@ -472,8 +543,9 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
 
     async def dashboard_context(request: Request, host: str | None) -> dict:
         selected_host = runtime.validate_host(host or initial_config["_host"])
+        dashboard = await run_in_threadpool(runtime.dashboard, selected_host)
         context = base_context(request, selected_host)
-        context.update(await run_in_threadpool(runtime.dashboard, selected_host))
+        context.update(dashboard)
         return context
 
     @app.get("/", response_class=HTMLResponse)
@@ -505,7 +577,7 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
                     "events": events,
                     "dangerous": operation.prune
                     or operation.force
-                    or operation.action == "restore",
+                    or operation.action in ("restore", "storage"),
                 }
             )
             return templates.TemplateResponse(
@@ -543,6 +615,7 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
                 "csrf_token": runtime.csrf_token,
                 "operation_label": operation_label(preview.request),
                 "selected_host": preview.request.host,
+                "reload_page": preview.request.action == "storage",
             },
         )
 

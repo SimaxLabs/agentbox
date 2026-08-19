@@ -114,8 +114,8 @@ main { width: min(1480px, 100%); margin: 0 auto; padding: 0 36px 56px; }
 .operation-title h3, .preview-header h3, .running-header h3, .error-card h3 { margin: 0; font-family: Georgia, serif; font-size: 2.2rem; font-weight: 500; letter-spacing: -0.035em; }
 .operation-title p:last-child { margin: 8px 0 0; color: var(--ink-soft); font-size: 0.85rem; line-height: 1.45; }
 .operation-card > label, .field-pair label { display: flex; flex-direction: column; gap: 7px; color: var(--ink-soft); font-size: 0.68rem; font-weight: 750; text-transform: uppercase; }
-.operation-card select { width: 100%; border: 1px solid var(--ink); border-radius: 0; padding: 11px 12px; background: var(--paper); color: var(--ink); font-weight: 650; text-transform: none; }
-.operation-card select:disabled { opacity: 0.6; cursor: not-allowed; }
+.operation-card select, .operation-card input[type="text"] { width: 100%; border: 1px solid var(--ink); border-radius: 0; padding: 11px 12px; background: var(--paper); color: var(--ink); font-weight: 650; text-transform: none; }
+.operation-card select:disabled, .operation-card input[type="text"]:disabled { opacity: 0.6; cursor: not-allowed; }
 .field-pair, .check-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .check-row { display: grid !important; grid-template-columns: 19px 1fr; align-items: start; gap: 10px !important; padding: 4px 0; color: var(--ink) !important; text-transform: none !important; }
 .check-row input { width: 17px; height: 17px; margin: 1px 0 0; accent-color: var(--ink); }

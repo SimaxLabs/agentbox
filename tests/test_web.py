@@ -28,7 +28,7 @@ class AiKitWebTest(unittest.IsolatedAsyncioTestCase):
                 {
                     "version": 1,
                     "host": "test-host",
-                    "catalog": str(self.catalog),
+                    "storage": {"local": str(self.catalog)},
                     "state_file": str(self.root / "state/state.json"),
                     "safety_backups": str(self.root / "state/backups"),
                     "tools": {
@@ -153,6 +153,41 @@ class AiKitWebTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"kind": "error"', events.text)
         self.assertIn("filesystem changed", events.text)
         self.assertFalse(self.catalog.exists())
+
+    async def test_storage_selection_is_previewed_and_persisted(self):
+        selected = self.root / "persistent-catalog"
+        preview = await self.client.post(
+            "/operations/preview",
+            data={
+                "csrf_token": self.csrf,
+                "action": "storage",
+                "local_enabled": "on",
+                "storage_local": str(selected),
+            },
+        )
+
+        self.assertEqual(200, preview.status_code)
+        self.assertIn("UPDATE STORAGE CONFIGURATION", preview.text)
+        self.assertEqual(
+            {"local": str(self.catalog)},
+            json.loads(self.config.read_text(encoding="utf-8"))["storage"],
+        )
+        token = re.search(r'name="preview_token" value="([^"]+)"', preview.text).group(1)
+
+        execute = await self.client.post(
+            "/operations/execute",
+            data={"csrf_token": self.csrf, "preview_token": token},
+        )
+        self.assertIn('data-reload-page="true"', execute.text)
+        job_id = re.search(r'data-job-id="([^"]+)"', execute.text).group(1)
+        events = await self.client.get(
+            "/operations/{}/events".format(job_id), params={"token": self.csrf}
+        )
+
+        self.assertIn('"kind": "complete"', events.text)
+        saved = json.loads(self.config.read_text(encoding="utf-8"))
+        self.assertEqual({"local": str(selected)}, saved["storage"])
+        self.assertNotIn("catalog", saved)
 
 
 if __name__ == "__main__":

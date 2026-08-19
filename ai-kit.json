@@ -1,6 +1,8 @@
 {
   "version": 1,
-  "catalog": "catalog",
+  "storage": {
+    "local": "~/.local/share/ai-kit/catalog"
+  },
   "state_file": "~/.local/state/ai-kit/state.json",
   "safety_backups": "~/.local/state/ai-kit/backups",
   "tools": {
@@ -32,7 +34,7 @@
             "path": "~/.agents/skills"
           },
           {
-            "id": "legacy-codex-skills",
+            "id": "codex-skills",
             "path": "~/.codex/skills"
           }
         ],
@@ -41,7 +43,7 @@
       "commands": {
         "sources": [
           {
-            "id": "legacy-codex-prompts",
+            "id": "codex-prompts",
             "path": "~/.codex/prompts"
           }
         ],

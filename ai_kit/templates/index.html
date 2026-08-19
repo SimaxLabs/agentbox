@@ -139,6 +139,34 @@
           </div>
           <button type="submit" class="primary-action">Preview restore <span aria-hidden="true">-&gt;</span></button>
         </form>
+
+        <form class="operation-card" method="post" action="/operations/preview" hx-post="/operations/preview" hx-target="#operation-panel" hx-swap="innerHTML" data-async-form>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="action" value="storage">
+          <div class="operation-number">03</div>
+          <div class="operation-title">
+            <p class="eyebrow">Persistent destinations</p>
+            <h3>Storage</h3>
+            <p>Keep a local catalog, a managed private Git repository, or both.</p>
+          </div>
+          <label class="check-row">
+            <input type="checkbox" name="local_enabled" {% if local_storage_path %}checked{% endif %}>
+            <span><strong>Local copy</strong><small>Store a catalog in a directory outside the application checkout.</small></span>
+          </label>
+          <label>
+            Local catalog directory
+            <input type="text" name="storage_local" value="{{ local_storage_path or '~/.local/share/ai-kit/catalog' }}" autocomplete="off">
+          </label>
+          <label class="check-row">
+            <input type="checkbox" name="git_enabled" {% if git_storage_url %}checked{% endif %}>
+            <span><strong>Managed Git copy</strong><small>Fetch, commit, and push through the configured private repository.</small></span>
+          </label>
+          <label>
+            Git repository URL
+            <input type="text" name="storage_git" value="{{ git_storage_form_url }}" placeholder="git@github.com:owner/private-catalog.git" autocomplete="off" spellcheck="false">
+          </label>
+          <button type="submit" class="primary-action">Preview storage change <span aria-hidden="true">-&gt;</span></button>
+        </form>
       </div>
 
       <div id="operation-panel" class="operation-panel" aria-live="polite">
@@ -150,7 +178,10 @@
     </section>
 
     <section class="paths-strip">
-      <div><span class="eyebrow">Catalog</span><code>{{ catalog_path }}</code></div>
+      <div><span class="eyebrow">Storage</span><code>{{ storage_label }}</code></div>
+      {% if local_storage_path %}<div><span class="eyebrow">Local catalog</span><code>{{ local_storage_path }}</code></div>{% endif %}
+      {% if git_storage_url %}<div><span class="eyebrow">Git repository</span><code>{{ git_storage_url }}</code></div>{% endif %}
+      <div><span class="eyebrow">Active catalog</span><code>{{ catalog_path }}</code></div>
       <div><span class="eyebrow">Deployment state</span><code>{{ state_path }}</code></div>
       <div><span class="eyebrow">Safety copies</span><code>{{ safety_path }}</code></div>
     </section>

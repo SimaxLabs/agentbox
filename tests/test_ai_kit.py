@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shutil
@@ -21,7 +22,7 @@ class AiKitTest(unittest.TestCase):
             "claude_skills": self.root / "home/claude/skills",
             "claude_commands": self.root / "home/claude/commands",
             "codex_current": self.root / "home/agents/skills",
-            "codex_legacy": self.root / "home/codex/skills",
+            "codex_secondary": self.root / "home/codex/skills",
             "codex_prompts": self.root / "home/codex/prompts",
             "opencode_skills": self.root / "home/opencode/skills",
             "opencode_commands": self.root / "home/opencode/commands",
@@ -31,12 +32,15 @@ class AiKitTest(unittest.TestCase):
         self.state = self.root / "state/state.json"
         self.safety = self.root / "state/backups"
         self.config = self.root / "ai-kit.json"
+        self.environment = os.environ.copy()
+        self.environment["XDG_DATA_HOME"] = str(self.root / "data")
+        self.environment["HOME"] = str(self.root / "home")
         self.config.write_text(
             json.dumps(
                 {
                     "version": 1,
                     "host": "test-host",
-                    "catalog": str(self.catalog_root),
+                    "storage": {"local": str(self.catalog_root)},
                     "state_file": str(self.state),
                     "safety_backups": str(self.safety),
                     "tools": {
@@ -45,7 +49,7 @@ class AiKitTest(unittest.TestCase):
                             "skills": {
                                 "sources": [
                                     {"id": "current", "path": str(self.paths["codex_current"])},
-                                    {"id": "legacy", "path": str(self.paths["codex_legacy"])},
+                                    {"id": "secondary", "path": str(self.paths["codex_secondary"])},
                                 ],
                                 "target": str(self.paths["codex_current"]),
                             },
@@ -82,6 +86,7 @@ class AiKitTest(unittest.TestCase):
             text=True,
             capture_output=True,
             check=False,
+            env=self.environment,
         )
         self.assertEqual(
             expected,
@@ -89,6 +94,34 @@ class AiKitTest(unittest.TestCase):
             "stdout:\n{}\nstderr:\n{}".format(result.stdout, result.stderr),
         )
         return result
+
+    def run_git(self, *arguments, expected=0):
+        if shutil.which("git") is None:
+            self.skipTest("git is unavailable")
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=str(self.root),
+            text=True,
+            capture_output=True,
+            check=False,
+            env=self.environment,
+        )
+        self.assertEqual(
+            expected,
+            result.returncode,
+            "stdout:\n{}\nstderr:\n{}".format(result.stdout, result.stderr),
+        )
+        return result
+
+    def set_storage(self, storage):
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["storage"] = storage
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+
+    def add_bare_repository(self):
+        repository = self.root / "remote.git"
+        self.run_git("init", "--bare", "--initial-branch=main", str(repository))
+        return repository
 
     def test_repository_launcher_is_executable(self):
         self.assertTrue(os.access(CLI, os.X_OK))
@@ -119,8 +152,8 @@ class AiKitTest(unittest.TestCase):
         path.write_text(content, encoding="utf-8")
         return path, content
 
-    def test_backup_preserves_legacy_skill_and_command_exactly(self):
-        skill, skill_content = self.add_skill("codex_legacy", "jira-ticket")
+    def test_backup_preserves_skill_and_command_exactly(self):
+        skill, skill_content = self.add_skill("codex_secondary", "jira-ticket")
         script = skill / "scripts/check.sh"
         script.parent.mkdir()
         script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -137,10 +170,10 @@ class AiKitTest(unittest.TestCase):
             (self.catalog / "opencode/commands/audit.md").read_text(encoding="utf-8"),
         )
         manifest = json.loads((self.catalog / "codex/manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual("legacy", manifest["artifacts"][0]["sources"][0]["id"])
+        self.assertEqual("secondary", manifest["artifacts"][0]["sources"][0]["id"])
 
     def test_converted_restore_does_not_duplicate_on_next_backup(self):
-        self.add_skill("codex_legacy", "jira-ticket")
+        self.add_skill("codex_secondary", "jira-ticket")
         self.add_command("opencode_commands")
         self.run_cli("backup", "all")
 
@@ -191,7 +224,7 @@ class AiKitTest(unittest.TestCase):
 
     def test_divergent_names_stop_restore_and_from_resolves_it(self):
         self.add_command("opencode_commands", name="audit", body="Audit command behavior.")
-        self.add_skill("codex_legacy", "audit", body="Different skill behavior.")
+        self.add_skill("codex_secondary", "audit", body="Different skill behavior.")
         self.run_cli("backup", "all")
 
         conflict = self.run_cli("restore", "claude", "--all-tools", expected=2)
@@ -202,10 +235,10 @@ class AiKitTest(unittest.TestCase):
         restored = (self.paths["claude_skills"] / "audit/SKILL.md").read_text(encoding="utf-8")
         self.assertIn("Audit command behavior.", restored)
 
-    def test_prune_keeps_artifacts_from_unavailable_legacy_source(self):
-        self.add_skill("codex_legacy", "jira-ticket")
+    def test_prune_keeps_artifacts_from_unavailable_source(self):
+        self.add_skill("codex_secondary", "jira-ticket")
         self.run_cli("backup", "codex")
-        shutil.rmtree(self.paths["codex_legacy"])
+        shutil.rmtree(self.paths["codex_secondary"])
         self.paths["codex_current"].mkdir(parents=True)
 
         result = self.run_cli("backup", "codex", "--prune")
@@ -213,7 +246,7 @@ class AiKitTest(unittest.TestCase):
         self.assertIn("KEEP unavailable source", result.stdout)
         self.assertTrue((self.catalog / "codex/skills/jira-ticket/SKILL.md").is_file())
         manifest = json.loads((self.catalog / "codex/manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual("legacy", manifest["artifacts"][0]["sources"][0]["id"])
+        self.assertEqual("secondary", manifest["artifacts"][0]["sources"][0]["id"])
 
     def test_modified_derived_artifact_conflicts_even_if_origin_is_removed(self):
         self.add_command("opencode_commands")
@@ -312,17 +345,17 @@ class AiKitTest(unittest.TestCase):
 
     def test_unavailable_duplicate_source_blocks_payload_replacement(self):
         _, original = self.add_skill("codex_current", "jira-ticket", body="Original")
-        legacy = self.paths["codex_legacy"] / "jira-ticket"
-        legacy.parent.mkdir(parents=True)
-        shutil.copytree(self.paths["codex_current"] / "jira-ticket", legacy)
+        secondary = self.paths["codex_secondary"] / "jira-ticket"
+        secondary.parent.mkdir(parents=True)
+        shutil.copytree(self.paths["codex_current"] / "jira-ticket", secondary)
         self.run_cli("backup", "codex")
-        shutil.rmtree(self.paths["codex_legacy"])
+        shutil.rmtree(self.paths["codex_secondary"])
         current_skill = self.paths["codex_current"] / "jira-ticket/SKILL.md"
         current_skill.write_text(original.replace("Original", "Changed"), encoding="utf-8")
 
         result = self.run_cli("backup", "codex", expected=2)
 
-        self.assertIn("recorded source(s) legacy are unavailable", result.stderr)
+        self.assertIn("recorded source(s) secondary are unavailable", result.stderr)
         backed = (self.catalog / "codex/skills/jira-ticket/SKILL.md").read_text(encoding="utf-8")
         self.assertIn("Original", backed)
 
@@ -343,7 +376,7 @@ class AiKitTest(unittest.TestCase):
 
     def test_restore_defaults_to_matching_tool_and_all_tools_is_explicit(self):
         self.add_command("opencode_commands")
-        self.add_skill("codex_legacy", "jira-ticket")
+        self.add_skill("codex_secondary", "jira-ticket")
         self.run_cli("backup", "all")
 
         self.run_cli("restore", "opencode")
@@ -464,7 +497,7 @@ class AiKitTest(unittest.TestCase):
 
     def test_overlapping_portable_targets_are_rejected_before_writing(self):
         self.add_skill("claude_skills", "shared", body="Claude")
-        self.add_skill("codex_legacy", "shared", body="Codex")
+        self.add_skill("codex_secondary", "shared", body="Codex")
         self.run_cli("backup", "all")
         config = json.loads(self.config.read_text(encoding="utf-8"))
         config["tools"]["claude"]["skills"]["target"] = str(self.paths["codex_current"])
@@ -481,6 +514,289 @@ class AiKitTest(unittest.TestCase):
         self.run_cli("backup", "opencode", "--dry-run")
 
         self.assertFalse(self.catalog.exists())
+
+    def test_explicit_local_storage_uses_configured_folder(self):
+        selected = self.root / "selected-local-catalog"
+        self.set_storage({"local": str(selected)})
+        self.add_command("opencode_commands")
+
+        self.run_cli("backup", "opencode")
+
+        self.assertTrue((selected / "test-host/opencode/commands/audit.md").is_file())
+        self.assertFalse(self.catalog.exists())
+
+    def test_git_storage_manages_clone_commit_and_push(self):
+        repository = self.add_bare_repository()
+        url = repository.as_uri()
+        self.set_storage({"git": url})
+        self.add_command("opencode_commands")
+
+        dry_run = self.run_cli("backup", "opencode", "--dry-run")
+
+        self.assertIn("GIT READY main@empty", dry_run.stdout)
+        self.run_git(
+            "--git-dir",
+            str(repository),
+            "rev-parse",
+            "--verify",
+            "refs/heads/main",
+            expected=128,
+        )
+
+        result = self.run_cli("backup", "opencode")
+
+        self.assertIn("GIT PUSH main", result.stdout)
+        backed_up = self.run_git(
+            "--git-dir",
+            str(repository),
+            "show",
+            "main:catalog/test-host/opencode/commands/audit.md",
+        )
+        self.assertIn("Audit $ARGUMENTS", backed_up.stdout)
+        checkout_id = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        self.assertTrue((self.root / "data/ai-kit/repositories" / checkout_id / ".git").is_dir())
+
+    def test_git_push_failure_rolls_back_managed_catalog(self):
+        repository = self.add_bare_repository()
+        self.set_storage({"git": repository.as_uri()})
+        command, original = self.add_command("opencode_commands")
+        self.run_cli("backup", "opencode")
+        command.write_text(original + "Changed\n", encoding="utf-8")
+        hook = repository / "hooks/pre-receive"
+        hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        hook.chmod(0o755)
+
+        failed = self.run_cli("backup", "opencode", expected=2)
+
+        self.assertIn("pre-receive hook declined", failed.stderr)
+        remote_content = self.run_git(
+            "--git-dir",
+            str(repository),
+            "show",
+            "main:catalog/test-host/opencode/commands/audit.md",
+        ).stdout
+        self.assertEqual(original, remote_content)
+        status = self.run_cli("status", "opencode")
+        self.assertIn("DIFFERENT opencode commands/audit.md", status.stdout)
+
+    def test_git_storage_forces_ignored_catalog_files(self):
+        repository = self.add_bare_repository()
+        seed = self.root / "seed"
+        self.run_git("clone", repository.as_uri(), str(seed))
+        (seed / ".gitignore").write_text("*.md\n", encoding="utf-8")
+        self.run_git("-C", str(seed), "add", ".gitignore")
+        self.run_git(
+            "-C",
+            str(seed),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-m",
+            "Add ignore rule",
+        )
+        self.run_git("-C", str(seed), "push", "origin", "main")
+        self.set_storage({"git": repository.as_uri()})
+        self.add_command("opencode_commands")
+
+        self.run_cli("backup", "opencode")
+
+        payload = self.run_git(
+            "--git-dir",
+            str(repository),
+            "show",
+            "main:catalog/test-host/opencode/commands/audit.md",
+        )
+        self.assertIn("Audit $ARGUMENTS", payload.stdout)
+
+    def test_git_status_and_dry_run_do_not_push_pending_commit(self):
+        repository = self.add_bare_repository()
+        url = repository.as_uri()
+        self.set_storage({"git": url})
+        self.add_command("opencode_commands")
+        self.run_cli("backup", "opencode")
+        checkout_id = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        checkout = self.root / "data/ai-kit/repositories" / checkout_id
+        self.run_git(
+            "-C",
+            str(checkout),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Pending commit",
+        )
+        remote_before = self.run_git(
+            "--git-dir", str(repository), "rev-parse", "refs/heads/main"
+        ).stdout.strip()
+
+        status = self.run_cli("status", "opencode")
+        dry_run = self.run_cli("backup", "opencode", "--dry-run")
+
+        self.assertIn("GIT PENDING COMMIT", status.stdout)
+        self.assertIn("GIT PENDING COMMIT", dry_run.stdout)
+        remote_after = self.run_git(
+            "--git-dir", str(repository), "rev-parse", "refs/heads/main"
+        ).stdout.strip()
+        self.assertEqual(remote_before, remote_after)
+
+        self.run_cli("backup", "opencode")
+        pushed = self.run_git(
+            "--git-dir", str(repository), "rev-parse", "refs/heads/main"
+        ).stdout.strip()
+        self.assertNotEqual(remote_before, pushed)
+
+    def test_git_storage_rejects_repository_attributes(self):
+        repository = self.add_bare_repository()
+        seed = self.root / "attributes-seed"
+        self.run_git("clone", repository.as_uri(), str(seed))
+        (seed / ".gitattributes").write_text("catalog/** text\n", encoding="utf-8")
+        self.run_git("-C", str(seed), "add", ".gitattributes")
+        self.run_git(
+            "-C",
+            str(seed),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-m",
+            "Add attributes",
+        )
+        self.run_git("-C", str(seed), "push", "origin", "main")
+        self.set_storage({"git": repository.as_uri()})
+
+        result = self.run_cli("status", expected=2)
+
+        self.assertIn("must not define .gitattributes", result.stderr)
+
+    def test_git_storage_rejects_embedded_repository_content(self):
+        repository = self.add_bare_repository()
+        self.set_storage({"git": repository.as_uri()})
+        skill, _ = self.add_skill("opencode_skills", "nested-repository")
+        nested = skill / ".git"
+        nested.mkdir()
+        (nested / "config").write_text("embedded", encoding="utf-8")
+
+        result = self.run_cli("backup", "opencode", expected=2)
+
+        self.assertIn("Git storage does not support artifact content", result.stderr)
+
+    def test_local_storage_accepts_git_named_supporting_content(self):
+        skill, _ = self.add_skill("opencode_skills", "local-repository-notes")
+        nested = skill / ".git"
+        nested.mkdir()
+        (nested / "config").write_text("supporting notes", encoding="utf-8")
+
+        self.run_cli("backup", "opencode")
+
+        self.assertEqual(
+            "supporting notes",
+            (
+                self.catalog
+                / "opencode/skills/local-repository-notes/.git/config"
+            ).read_text(encoding="utf-8"),
+        )
+
+    def test_dual_storage_initializes_git_and_keeps_local_copy(self):
+        self.add_command("opencode_commands")
+        self.run_cli("backup", "opencode")
+        repository = self.add_bare_repository()
+        self.set_storage({"local": str(self.catalog_root), "git": repository.as_uri()})
+
+        result = self.run_cli("backup", "opencode")
+
+        self.assertIn("INITIALIZE GIT STORAGE FROM LOCAL CATALOG", result.stdout)
+        self.assertTrue((self.catalog / "opencode/commands/audit.md").is_file())
+        self.run_git(
+            "--git-dir",
+            str(repository),
+            "show",
+            "main:catalog/test-host/opencode/commands/audit.md",
+        )
+
+        command = self.paths["opencode_commands"] / "audit.md"
+        command.write_text(command.read_text(encoding="utf-8") + "Changed\n", encoding="utf-8")
+        self.run_cli("backup", "opencode")
+        self.assertIn("Changed", (self.catalog / "opencode/commands/audit.md").read_text())
+
+    def test_dual_storage_stops_when_copies_differ(self):
+        self.add_command("opencode_commands")
+        self.run_cli("backup", "opencode")
+        repository = self.add_bare_repository()
+        self.set_storage({"local": str(self.catalog_root), "git": repository.as_uri()})
+        self.run_cli("backup", "opencode")
+        local_payload = self.catalog / "opencode/commands/audit.md"
+        local_payload.write_text("Divergent local catalog\n", encoding="utf-8")
+
+        result = self.run_cli("status", expected=2)
+
+        self.assertIn("Local and Git catalogs differ", result.stderr)
+
+    def test_dual_storage_rolls_back_local_copy_when_push_is_rejected(self):
+        command, original = self.add_command("opencode_commands")
+        self.run_cli("backup", "opencode")
+        repository = self.add_bare_repository()
+        self.set_storage({"local": str(self.catalog_root), "git": repository.as_uri()})
+        self.run_cli("backup", "opencode")
+        hook = repository / "hooks/pre-receive"
+        hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        hook.chmod(0o755)
+        command.write_text(original + "Changed\n", encoding="utf-8")
+
+        self.run_cli("backup", "opencode", expected=2)
+
+        self.assertEqual(
+            original,
+            (self.catalog / "opencode/commands/audit.md").read_text(encoding="utf-8"),
+        )
+
+    def test_top_level_catalog_setting_is_rejected(self):
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config.pop("storage")
+        config["catalog"] = str(self.root / "other")
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+
+        result = self.run_cli("status", expected=2)
+
+        self.assertIn("Use storage.local", result.stderr)
+
+    def test_storage_command_persists_selection_after_dry_run(self):
+        selected = self.root / "persistent-local"
+        self.config.chmod(0o600)
+
+        preview = self.run_cli("storage", "--local", str(selected), "--dry-run")
+
+        self.assertIn("UPDATE STORAGE CONFIGURATION", preview.stdout)
+        unchanged = json.loads(self.config.read_text(encoding="utf-8"))
+        self.assertEqual({"local": str(self.catalog_root)}, unchanged["storage"])
+
+        self.run_cli("storage", "--local", str(selected))
+        saved = json.loads(self.config.read_text(encoding="utf-8"))
+        self.assertEqual({"local": str(selected)}, saved["storage"])
+        self.assertNotIn("catalog", saved)
+        self.assertEqual(0o600, self.config.stat().st_mode & 0o777)
+
+        self.add_command("opencode_commands")
+        self.run_cli("backup", "opencode")
+        self.assertTrue((selected / "test-host/opencode/commands/audit.md").is_file())
+
+    def test_git_storage_rejects_urls_with_embedded_tokens(self):
+        self.set_storage({"git": "https://example.invalid/repo.git?token=secret"})
+
+        result = self.run_cli("status", expected=2)
+
+        self.assertIn("must not contain embedded credentials", result.stderr)
+        self.assertNotIn("secret", result.stderr)
+
+        self.set_storage({"git": "ssh://user:secret@example.invalid/repo.git"})
+        result = self.run_cli("status", expected=2)
+        self.assertIn("must not contain embedded credentials", result.stderr)
+        self.assertNotIn("secret", result.stderr)
 
 
 if __name__ == "__main__":
