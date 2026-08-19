@@ -86,7 +86,7 @@ The local service uses a per-process CSRF token, trusted-host validation, serial
 
 ### Configuration Selection
 
-The repository launcher prefers the `ai-kit.json` beside the source checkout. Installed commands use `ai-kit.json` from the current directory when available, then fall back to the bundled configuration. Both shipped configurations store their local catalog outside the source checkout under `~/.local/share/ai-kit/catalog`.
+The repository launcher prefers the `ai-kit.json` beside the source checkout. Installed commands use `ai-kit.json` from the current directory when available, then fall back to the bundled configuration. Both shipped configurations omit storage paths so AI Kit selects the platform data directory at runtime.
 
 Select another file explicitly with the existing global option:
 
@@ -170,10 +170,16 @@ AI_KIT_HOST=alice-work ./ai-kit backup all
 
 Local storage is the default when `storage` is omitted:
 
+- Windows: `%LOCALAPPDATA%\AI Kit\catalog`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/ai-kit/catalog`
+- macOS: `${XDG_DATA_HOME:-~/.local/share}/ai-kit/catalog`
+
+Set an explicit location when needed:
+
 ```json
 {
   "storage": {
-    "local": "~/.local/share/ai-kit/catalog"
+    "local": "~/Backups/ai-kit-catalog"
   }
 }
 ```
@@ -202,7 +208,7 @@ Enable both destinations for two persistent copies:
 Persist the same choices from the CLI, or use the Storage card in the browser interface:
 
 ```bash
-./ai-kit storage --local ~/.local/share/ai-kit/catalog
+./ai-kit storage --local ~/Backups/ai-kit-catalog
 ./ai-kit storage --git git@github.com:example/private-ai-kit-catalog.git
 ./ai-kit storage --local ~/Backups/ai-kit-catalog --git git@github.com:example/private-ai-kit-catalog.git
 ```
@@ -211,7 +217,7 @@ Add `--dry-run` to preview a CLI storage change without updating the configurati
 
 The selected destinations remain active on every operation until their keys are removed from `storage`. Removing a destination does not delete its data.
 
-Git storage requires the `git` executable. AI Kit keeps a URL-keyed managed checkout under `${XDG_DATA_HOME:-~/.local/share}/ai-kit/repositories/`, fetches and fast-forwards it before operations, commits `catalog/` after a successful backup, and pushes without force. A remote race or non-fast-forward update stops the operation so it can be previewed again.
+Git storage requires the `git` executable. AI Kit keeps a URL-keyed managed checkout under the platform data directory (`%LOCALAPPDATA%\AI Kit\repositories` on Windows or `${XDG_DATA_HOME:-~/.local/share}/ai-kit/repositories` elsewhere), fetches and fast-forwards it before operations, commits `catalog/` after a successful backup, and pushes without force. A remote race or non-fast-forward update stops the operation so it can be previewed again.
 
 In dual mode, both catalogs must agree before normal operations. If one destination is empty, the next confirmed backup initializes it from the populated destination. If both contain different data, or Git is unavailable, AI Kit stops instead of selecting or overwriting one copy. Dry runs and status may create or fetch the managed checkout, but they do not commit, push, populate the configured local destination, or change tool files.
 
@@ -256,7 +262,7 @@ This mode only reads the target tool's catalog for the selected hostname. It res
 
 ## Duplicate Prevention
 
-Portable restores write a deployment receipt to `~/.local/state/ai-kit/state.json`. The receipt records the installed hash and its catalog origins.
+Portable restores write a deployment receipt under the platform state directory: `%LOCALAPPDATA%\AI Kit\state\state.json` on Windows or `${XDG_STATE_HOME:-~/.local/state}/ai-kit/state.json` elsewhere. The receipt records the installed hash and its catalog origins.
 
 On the next backup:
 
@@ -271,7 +277,7 @@ Backing up an edited derived copy can intentionally create two divergent entries
 
 - `--dry-run` previews backup and restore operations.
 - Divergent catalog entries stop portable restoration before target files are changed.
-- Existing target artifacts are copied to `~/.local/state/ai-kit/backups/<timestamp>/` before replacement.
+- Existing target artifacts are copied under the platform state directory's `backups/<timestamp>/` folder before replacement.
 - Managed Git backups are committed and pushed only after catalog preflight succeeds; pushes are never forced.
 - Dual storage stops when its local and Git copies differ or the remote is unavailable.
 - New payloads are staged before they replace an existing catalog or tool artifact.

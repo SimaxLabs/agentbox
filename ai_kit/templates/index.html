@@ -155,7 +155,7 @@
           </label>
           <label>
             Local catalog directory
-            <input type="text" name="storage_local" value="{{ local_storage_path or '~/.local/share/ai-kit/catalog' }}" autocomplete="off">
+            <input type="text" name="storage_local" value="{{ local_storage_path or default_local_storage_path }}" autocomplete="off">
           </label>
           <label class="check-row">
             <input type="checkbox" name="git_enabled" {% if git_storage_url %}checked{% endif %}>

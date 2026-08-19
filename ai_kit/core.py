@@ -12,6 +12,7 @@ import shutil
 import socket
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -31,7 +32,6 @@ except ImportError:  # pragma: no cover - POSIX has no msvcrt.
 
 
 VERSION = 1
-DEFAULT_LOCAL_CATALOG = "~/.local/share/ai-kit/catalog"
 GIT_TIMEOUT_SECONDS = 120
 _GENERATED_SKILL_DIRECTORY_MODE = 0o755
 _GENERATED_SKILL_FILE_MODE = 0o644
@@ -136,15 +136,34 @@ def expand_path(value: str, base: Path) -> Path:
 
 
 def user_data_root() -> Path:
-    if os.name == "nt":  # pragma: no cover - exercised on Windows.
+    if sys.platform == "win32":  # pragma: no cover - exercised on Windows.
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
-            return Path(local_app_data) / "AI Kit"
+            candidate = Path(os.path.expandvars(os.path.expanduser(local_app_data)))
+            if candidate.is_absolute():
+                return candidate / "AI Kit"
         return Path.home() / "AppData/Local/AI Kit"
     xdg_data_home = os.environ.get("XDG_DATA_HOME")
     if xdg_data_home:
-        return Path(os.path.expandvars(os.path.expanduser(xdg_data_home))) / "ai-kit"
+        candidate = Path(os.path.expandvars(os.path.expanduser(xdg_data_home)))
+        if candidate.is_absolute():
+            return candidate / "ai-kit"
     return Path.home() / ".local/share/ai-kit"
+
+
+def default_local_catalog() -> Path:
+    return user_data_root() / "catalog"
+
+
+def user_state_root() -> Path:
+    if sys.platform == "win32":  # pragma: no cover - exercised on Windows.
+        return user_data_root() / "state"
+    xdg_state_home = os.environ.get("XDG_STATE_HOME")
+    if xdg_state_home:
+        candidate = Path(os.path.expandvars(os.path.expanduser(xdg_state_home)))
+        if candidate.is_absolute():
+            return candidate / "ai-kit"
+    return Path.home() / ".local/state/ai-kit"
 
 
 def storage_roots(config: dict) -> list[Path]:
@@ -178,7 +197,7 @@ def _parse_storage(config: dict, base: Path) -> tuple[Path | None, str | None, P
         raise AiKitError("Use storage.local to configure local catalog storage")
     storage = config.get("storage")
     if storage is None:
-        return expand_path(DEFAULT_LOCAL_CATALOG, base), None, None
+        return default_local_catalog(), None, None
     if not isinstance(storage, dict):
         raise AiKitError("storage must be an object")
     unknown = set(storage) - {"local", "git"}
@@ -287,11 +306,15 @@ def load_config(path: Path, host_override: str | None = None) -> dict:
     config["_catalog"] = config["_catalog_root"] / host
     if config["_catalog"].is_symlink():
         raise AiKitError("Symlinked host catalogs are not supported: {}".format(config["_catalog"]))
-    config["_state_file"] = expand_path(
-        config.get("state_file", "~/.local/state/ai-kit/state.json"), base
+    state_file = config.get("state_file")
+    safety_backups = config.get("safety_backups")
+    config["_state_file"] = (
+        expand_path(state_file, base) if state_file is not None else user_state_root() / "state.json"
     )
-    config["_safety_backups"] = expand_path(
-        config.get("safety_backups", "~/.local/state/ai-kit/backups"), base
+    config["_safety_backups"] = (
+        expand_path(safety_backups, base)
+        if safety_backups is not None
+        else user_state_root() / "backups"
     )
     for tool_name, tool in tools.items():
         if not CONFIG_NAME.fullmatch(tool_name):

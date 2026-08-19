@@ -7,6 +7,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from ai_kit.core import default_local_catalog, user_state_root
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -524,6 +527,40 @@ class AiKitTest(unittest.TestCase):
 
         self.assertTrue((selected / "test-host/opencode/commands/audit.md").is_file())
         self.assertFalse(self.catalog.exists())
+
+    def test_omitted_storage_uses_platform_data_directory(self):
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config.pop("storage")
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        self.add_command("opencode_commands")
+
+        self.run_cli("backup", "opencode")
+
+        expected = self.root / "data/ai-kit/catalog/test-host/opencode/commands/audit.md"
+        self.assertTrue(expected.is_file())
+        self.assertFalse(self.catalog.exists())
+
+    def test_platform_default_directories(self):
+        windows_data = self.root / "windows-data"
+        linux_data = self.root / "linux-data"
+        linux_state = self.root / "linux-state"
+
+        with patch("ai_kit.core.sys.platform", "win32"), patch.dict(
+            os.environ, {"LOCALAPPDATA": str(windows_data)}, clear=False
+        ):
+            self.assertEqual(windows_data / "AI Kit/catalog", default_local_catalog())
+            self.assertEqual(windows_data / "AI Kit/state", user_state_root())
+
+        with patch("ai_kit.core.sys.platform", "linux"), patch.dict(
+            os.environ,
+            {
+                "XDG_DATA_HOME": str(linux_data),
+                "XDG_STATE_HOME": str(linux_state),
+            },
+            clear=False,
+        ):
+            self.assertEqual(linux_data / "ai-kit/catalog", default_local_catalog())
+            self.assertEqual(linux_state / "ai-kit", user_state_root())
 
     def test_git_storage_manages_clone_commit_and_push(self):
         repository = self.add_bare_repository()
