@@ -1,4 +1,4 @@
-"""Runtime paths shared by command-line and desktop entry points."""
+"""Runtime paths shared by command-line and browser entry points."""
 
 import os
 from pathlib import Path

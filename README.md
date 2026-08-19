@@ -12,7 +12,7 @@ The repository is the durable backup. Tool directories are working copies.
 
 - Python 3.14 or newer
 - The CLI has no third-party runtime dependencies.
-- The browser and desktop interfaces use optional dependencies installed below.
+- The browser interface uses optional dependencies installed below.
 
 ## Installation
 
@@ -21,10 +21,10 @@ Create an isolated environment for the UI:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e '.[desktop]'
+pip install -e '.[ui]'
 ```
 
-Use `.[ui]` instead when only the browser interface is needed. The repository launcher continues to work without installation for CLI-only use.
+The repository launcher continues to work without installation for CLI-only use.
 
 ## Quick Start
 
@@ -38,32 +38,7 @@ git diff
 
 ## User Interface
 
-### Native Desktop
-
-Install the desktop dependencies and open the pywebview application:
-
-```bash
-pip install -e '.[desktop]'
-./ai-kit desktop
-```
-
-The installed command is also available as `ai-kit-desktop`.
-
-The native window contains:
-
-- Per-tool backup status and source availability
-- Searchable catalog artifacts and recorded origins
-- Backup and restore operation builders
-- Portable and exact-original restore modes
-- Required dry-run previews
-- Explicit confirmation for writes, pruning, and forced symlink replacement
-- Live operation logs
-
-Closing the native window waits for an active filesystem operation to finish before stopping the local server.
-
-### Browser
-
-Run the same interface in the default browser:
+Run the interface in the default browser:
 
 ```bash
 pip install -e '.[ui]'
@@ -75,6 +50,16 @@ The standalone installed command is `ai-kit-ui`. Its default address is `http://
 ```bash
 ./ai-kit ui --port 9000
 ```
+
+The browser interface contains:
+
+- Per-tool backup status and source availability
+- Searchable catalog artifacts and recorded origins
+- Backup and restore operation builders
+- Portable and exact-original restore modes
+- Required dry-run previews
+- Explicit confirmation for writes, pruning, and forced symlink replacement
+- Live operation logs
 
 The server only accepts loopback binds. HTMX and all other application assets are bundled locally, so the interface does not require network access.
 
@@ -99,10 +84,9 @@ Select another file explicitly with the existing global option:
 
 ```bash
 ./ai-kit --config /path/to/ai-kit.json ui
-ai-kit-desktop --config /path/to/ai-kit.json
 ```
 
-`AI_KIT_CONFIG` can also set the default configuration path for installed and packaged entry points.
+`AI_KIT_CONFIG` can also set the default configuration path for installed entry points.
 
 Restore this host's Codex artifacts to Codex as skills:
 
@@ -256,7 +240,6 @@ The paths and additional tools are configured in `ai-kit.json`. Every source has
 ./ai-kit [--host hostname] restore <all|tool> [--dry-run] [--from tool | --all-tools] [--all-hosts] [--as-backed-up] [--force]
 ./ai-kit [--host hostname] status [all|tool]
 ./ai-kit [--host hostname] ui [--port port] [--no-open]
-./ai-kit [--host hostname] desktop [--debug]
 ```
 
 When using a different configuration file, put the global option before the command:
@@ -279,20 +262,3 @@ Install the test dependencies to run the complete suite:
 pip install -e '.[test]'
 python3 -m unittest discover -s tests -v
 ```
-
-## Desktop Package
-
-Build an unsigned, platform-specific desktop application with PyInstaller:
-
-```bash
-pip install -e '.[build]'
-pyinstaller --noconfirm ai-kit-desktop.spec
-```
-
-On macOS this produces `dist/AI Kit.app`. To launch the packaged application with a repository configuration:
-
-```bash
-open "dist/AI Kit.app" --args --config "/path/to/ai-kit.json"
-```
-
-The package includes the FastAPI templates, CSS, JavaScript, vendored HTMX, and fallback configuration. Distribution outside the local machine may additionally require platform signing and notarization.

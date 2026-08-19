@@ -73,9 +73,6 @@ def parse_args(
     ui.add_argument("--bind", default="127.0.0.1", choices=["127.0.0.1", "localhost"])
     ui.add_argument("--port", type=int, default=8765)
     ui.add_argument("--no-open", action="store_true", help="do not open a browser automatically")
-
-    desktop = subparsers.add_parser("desktop", help="open the native pywebview interface")
-    desktop.add_argument("--debug", action="store_true", help="enable pywebview debug tools")
     return parser.parse_args(arguments)
 
 
@@ -102,10 +99,6 @@ def main(
             port=args.port,
             open_browser=not args.no_open,
         )
-    if args.action == "desktop":
-        from .desktop import run_desktop
-
-        return run_desktop(config_path, host_override=args.host, debug=args.debug)
 
     request = OperationRequest(
         action=args.action,
@@ -133,7 +126,7 @@ def entrypoint(repository_config: Path | None = None) -> None:
     except ImportError as exc:
         print(
             "error: optional UI dependencies are unavailable: {}. "
-            "Install ai-kit with the ui or desktop extra.".format(exc),
+            "Install ai-kit with the ui extra.".format(exc),
             file=sys.stderr,
         )
         raise SystemExit(2)

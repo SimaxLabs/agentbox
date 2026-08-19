@@ -1,4 +1,4 @@
-HTMX is vendored as `htmx.min.js` for offline desktop use.
+HTMX is vendored as `htmx.min.js` for offline browser use.
 
 Source: https://github.com/bigskysoftware/htmx/releases/tag/v2.0.4
 License: BSD 2-Clause
