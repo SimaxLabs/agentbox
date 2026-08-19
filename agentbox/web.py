@@ -1,4 +1,4 @@
-"""Loopback-only FastAPI interface for AI Kit."""
+"""Loopback-only FastAPI interface for AgentBox."""
 
 import hashlib
 import json
@@ -20,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .core import (
-    AiKitError,
+    AgentBoxError,
     OperationEvent,
     OperationRequest,
     catalog_hosts,
@@ -109,7 +109,7 @@ def update_tree_fingerprint(digest: object, path: Path) -> None:
         digest.update(b"missing\0")
         return
     except OSError as exc:
-        raise AiKitError("Cannot inspect {}: {}".format(path, exc))
+        raise AgentBoxError("Cannot inspect {}: {}".format(path, exc))
 
     digest.update(str(metadata.st_mode).encode("ascii"))
     digest.update(b"\0")
@@ -132,7 +132,7 @@ def update_tree_fingerprint(digest: object, path: Path) -> None:
         else:
             digest.update(b"special\0")
     except OSError as exc:
-        raise AiKitError("Cannot inspect {}: {}".format(path, exc))
+        raise AgentBoxError("Cannot inspect {}: {}".format(path, exc))
     digest.update(b"\0")
 
 
@@ -145,7 +145,7 @@ def update_path_identity(digest: object, path: Path) -> None:
         digest.update(b"missing\0")
         return
     except OSError as exc:
-        raise AiKitError("Cannot inspect {}: {}".format(path, exc))
+        raise AgentBoxError("Cannot inspect {}: {}".format(path, exc))
     digest.update(
         "{}:{}:{}".format(metadata.st_dev, metadata.st_ino, metadata.st_mode).encode("ascii")
     )
@@ -201,14 +201,14 @@ class WebRuntime:
             if {
                 item.expanduser().resolve() for item in storage_lock_identities(current)
             } != {item.expanduser().resolve() for item in locked_identities}:
-                raise AiKitError("Storage configuration changed while waiting; retry the operation")
+                raise AgentBoxError("Storage configuration changed while waiting; retry the operation")
             yield
 
     def validate_host(self, host: str) -> str:
         config, hosts = self.available_hosts()
         selected = host or config["_host"]
         if selected not in hosts:
-            raise AiKitError("Unknown catalog host: {}".format(selected))
+            raise AgentBoxError("Unknown catalog host: {}".format(selected))
         return selected
 
     def filesystem_signature(self, request: OperationRequest) -> str:
@@ -258,9 +258,9 @@ class WebRuntime:
                 )
                 filesystem = self.filesystem_signature(request)
                 if filesystem_before is None:
-                    raise AiKitError("The operation did not prepare a filesystem preview")
+                    raise AgentBoxError("The operation did not prepare a filesystem preview")
                 if filesystem_before != filesystem:
-                    raise AiKitError(
+                    raise AgentBoxError(
                         "The filesystem changed while building this preview; try again"
                     )
         token = secrets.token_urlsafe(24)
@@ -282,13 +282,13 @@ class WebRuntime:
         with self.state_lock:
             preview = self.previews.pop(token, None)
         if preview is None or time.monotonic() - preview.created_at > PREVIEW_TTL_SECONDS:
-            raise AiKitError("This preview expired or was already used; preview the operation again")
+            raise AgentBoxError("This preview expired or was already used; preview the operation again")
         return preview
 
     def start_job(self, preview: StoredPreview) -> OperationJob:
         with self.state_lock:
             if any(not existing.done for existing in self.jobs.values()):
-                raise AiKitError("Another operation is still running; wait for it to finish")
+                raise AgentBoxError("Another operation is still running; wait for it to finish")
             if len(self.jobs) >= 50:
                 completed = [key for key, value in self.jobs.items() if value.done]
                 for key in completed[:25]:
@@ -322,16 +322,16 @@ class WebRuntime:
                     )
                     filesystem = self.filesystem_signature(job.request)
                     if filesystem_before is None:
-                        raise AiKitError("The operation did not prepare a filesystem confirmation")
+                        raise AgentBoxError("The operation did not prepare a filesystem confirmation")
                     if filesystem_before != filesystem:
-                        raise AiKitError(
+                        raise AgentBoxError(
                             "The filesystem changed during confirmation; review a new dry run"
                         )
                     if (
                         plan_signature(current_changes, current_events, filesystem)
                         != job.expected_plan
                     ):
-                        raise AiKitError(
+                        raise AgentBoxError(
                             "The filesystem changed after this preview; review a new dry run"
                         )
 
@@ -341,7 +341,7 @@ class WebRuntime:
                             plan_signature(current_changes, current_events, latest)
                             != job.expected_plan
                         ):
-                            raise AiKitError(
+                            raise AgentBoxError(
                                 "The filesystem changed before execution; review a new dry run"
                             )
 
@@ -354,7 +354,7 @@ class WebRuntime:
                     )
             noun = "change" if changes == 1 else "changes"
             job.finish(True, "Operation complete: {} {} applied.".format(changes, noun))
-        except AiKitError as exc:
+        except AgentBoxError as exc:
             job.finish(False, "Operation stopped: {}".format(exc))
         except Exception:
             LOGGER.exception("Unexpected UI operation failure")
@@ -370,7 +370,7 @@ class WebRuntime:
         with self.state_lock:
             job = self.jobs.get(job_id)
         if job is None:
-            raise AiKitError("Unknown operation log")
+            raise AgentBoxError("Unknown operation log")
         return job
 
     def dashboard(self, selected_host: str) -> dict:
@@ -451,7 +451,7 @@ def checked_csrf(runtime: WebRuntime, supplied: object) -> None:
 
 def checked_port(value: int) -> int:
     if value < 1 or value > 65535:
-        raise AiKitError("Port must be between 1 and 65535")
+        raise AgentBoxError("Port must be between 1 and 65535")
     return value
 
 
@@ -498,7 +498,7 @@ def operation_from_form(runtime: WebRuntime, form: object) -> OperationRequest:
             ),
         )
     if action not in ("backup", "restore"):
-        raise AiKitError("Choose a backup, restore, storage, or provider operation")
+        raise AgentBoxError("Choose a backup, restore, storage, or provider operation")
     tool = str(form.get("tool", "all"))
     selected_host = runtime.validate_host(str(form.get("host", "")))
     if action == "backup":
@@ -518,7 +518,7 @@ def operation_from_form(runtime: WebRuntime, form: object) -> OperationRequest:
     elif source_mode.startswith("tool:"):
         source_tool = source_mode.split(":", 1)[1]
     elif source_mode != "matching":
-        raise AiKitError("Choose a valid restore source")
+        raise AgentBoxError("Choose a valid restore source")
     as_backed_up = str(form.get("restore_mode", "portable")) == "exact"
     return OperationRequest(
         "restore",
@@ -547,7 +547,7 @@ def operation_label(request: OperationRequest) -> str:
 def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
     runtime = WebRuntime(config_path, host_override)
     templates = Jinja2Templates(directory=str(PACKAGE_ROOT / "templates"))
-    app = FastAPI(title="AI Kit", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="AgentBox", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.runtime = runtime
     app.add_middleware(
         TrustedHostMiddleware,
@@ -679,7 +679,7 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
             return templates.TemplateResponse(
                 request=request, name="partials/preview.html", context=context
             )
-        except AiKitError as exc:
+        except AgentBoxError as exc:
             context["error"] = str(exc)
             return templates.TemplateResponse(
                 request=request,
@@ -695,7 +695,7 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
         try:
             preview = runtime.consume_preview(str(form.get("preview_token", "")))
             job = runtime.start_job(preview)
-        except AiKitError as exc:
+        except AgentBoxError as exc:
             return templates.TemplateResponse(
                 request=request,
                 name="partials/error.html",
@@ -720,7 +720,7 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
         checked_csrf(runtime, token)
         try:
             job = runtime.get_job(job_id)
-        except AiKitError as exc:
+        except AgentBoxError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
 
         try:
@@ -769,7 +769,7 @@ def run_browser(
 
     checked_port(port)
     if bind not in ("127.0.0.1", "localhost"):
-        raise AiKitError("The UI can only bind to the local loopback interface")
+        raise AgentBoxError("The UI can only bind to the local loopback interface")
     app = create_app(config_path, host_override)
     url = "http://{}:{}/".format(bind, port)
     if open_browser:

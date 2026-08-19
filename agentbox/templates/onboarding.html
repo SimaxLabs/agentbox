@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light">
   <meta name="theme-color" content="#162321">
   <meta name="htmx-config" content='{"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"409","swap":true},{"code":"422","swap":true},{"code":"[45]..","swap":false}]}' type="application/json">
-  <title>Set up AI Kit</title>
+  <title>Set up AgentBox</title>
   <link rel="icon" href="/static/logo.png" type="image/png">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/vendor/htmx.min.js" defer></script>
@@ -14,9 +14,9 @@
 </head>
 <body class="onboarding-page">
   <header class="masthead">
-    <a class="brand" href="/" aria-label="AI Kit setup">
+    <a class="brand" href="/" aria-label="AgentBox setup">
       <span class="brand-mark"><img src="/static/logo.png" alt=""></span>
-      <span><strong>AI Kit</strong><small>machine setup</small></span>
+      <span><strong>AgentBox</strong><small>machine setup</small></span>
     </a>
     <div class="environment">
       <div class="environment-item config-item">
@@ -45,7 +45,7 @@
       <div class="onboarding-intro">
         <p class="kicker">Configure once, move safely</p>
         <h1>Map your AI<br>tooling.</h1>
-        <p>Choose what belongs in your unified catalog. AI Kit keeps each provider's original files intact and previews every write.</p>
+        <p>Choose what belongs in your unified catalog. AgentBox keeps each provider's original files intact and previews every write.</p>
       </div>
 
       <form class="setup-form" method="post" action="/operations/preview" hx-post="/operations/preview" hx-target="#operation-panel" hx-swap="innerHTML" data-async-form>
@@ -91,7 +91,7 @@
             </label>
             <label class="storage-choice">
               <input type="checkbox" name="git_enabled" {% if git_storage_enabled %}checked{% endif %}>
-              <span><strong>Managed Git</strong><small>AI Kit fetches, commits, and pushes through your Git credentials.</small></span>
+              <span><strong>Managed Git</strong><small>AgentBox fetches, commits, and pushes through your Git credentials.</small></span>
             </label>
           </div>
           <div class="storage-fields">

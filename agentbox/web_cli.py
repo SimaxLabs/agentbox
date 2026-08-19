@@ -5,14 +5,14 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from .core import AiKitError
+from .core import AgentBoxError
 from .paths import default_config_path
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
     from .web import run_browser
 
-    parser = argparse.ArgumentParser(description="Open the AI Kit browser interface.")
+    parser = argparse.ArgumentParser(description="Open the AgentBox browser interface.")
     parser.add_argument("--config", default=str(default_config_path()))
     parser.add_argument("--host")
     parser.add_argument("--bind", default="127.0.0.1", choices=["127.0.0.1", "localhost"])
@@ -31,13 +31,13 @@ def main(arguments: Sequence[str] | None = None) -> int:
 def entrypoint() -> None:
     try:
         raise SystemExit(main())
-    except AiKitError as exc:
+    except AgentBoxError as exc:
         print("error: {}".format(exc), file=sys.stderr)
         raise SystemExit(2)
     except ImportError as exc:
         print(
             "error: UI dependencies are unavailable: {}. "
-            "Install or reinstall ai-kit.".format(exc),
+            "Install or reinstall AgentBox.".format(exc),
             file=sys.stderr,
         )
         raise SystemExit(2)

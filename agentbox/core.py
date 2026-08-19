@@ -42,7 +42,7 @@ CONFIG_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 PLACEHOLDER = re.compile(r"\$(?:ARGUMENTS(?:\[[0-9]+\])?|[A-Z][A-Z0-9_]*|[0-9]+)")
 
 
-class AiKitError(Exception):
+class AgentBoxError(Exception):
     pass
 
 
@@ -76,7 +76,7 @@ class Candidate:
         if self.generated is not None:
             return hash_generated_skill(self.generated)
         if self.payload is None:
-            raise AiKitError("Restore candidate has no payload")
+            raise AgentBoxError("Restore candidate has no payload")
         return hash_path(self.payload)
 
 
@@ -153,14 +153,14 @@ def user_data_root() -> Path:
         if local_app_data:
             candidate = Path(os.path.expandvars(os.path.expanduser(local_app_data)))
             if candidate.is_absolute():
-                return candidate / "AI Kit"
-        return Path.home() / "AppData/Local/AI Kit"
+                return candidate / "AgentBox"
+        return Path.home() / "AppData/Local/AgentBox"
     xdg_data_home = os.environ.get("XDG_DATA_HOME")
     if xdg_data_home:
         candidate = Path(os.path.expandvars(os.path.expanduser(xdg_data_home)))
         if candidate.is_absolute():
-            return candidate / "ai-kit"
-    return Path.home() / ".local/share/ai-kit"
+            return candidate / "agentbox"
+    return Path.home() / ".local/share/agentbox"
 
 
 def default_local_catalog() -> Path:
@@ -174,8 +174,8 @@ def user_state_root() -> Path:
     if xdg_state_home:
         candidate = Path(os.path.expandvars(os.path.expanduser(xdg_state_home)))
         if candidate.is_absolute():
-            return candidate / "ai-kit"
-    return Path.home() / ".local/state/ai-kit"
+            return candidate / "agentbox"
+    return Path.home() / ".local/state/agentbox"
 
 
 def storage_roots(config: dict) -> list[Path]:
@@ -206,41 +206,41 @@ def git_storage_revision(config: dict) -> str | None:
 
 def _parse_storage(config: dict, base: Path) -> tuple[Path | None, str | None, Path | None]:
     if "catalog" in config:
-        raise AiKitError("Use storage.local to configure local catalog storage")
+        raise AgentBoxError("Use storage.local to configure local catalog storage")
     storage = config.get("storage")
     if storage is None:
         local_root = default_local_catalog()
         if local_root.is_symlink():
-            raise AiKitError("Symlinked catalog roots are not supported: {}".format(local_root))
+            raise AgentBoxError("Symlinked catalog roots are not supported: {}".format(local_root))
         if local_root.exists() and not local_root.is_dir():
-            raise AiKitError("Catalog root is not a directory: {}".format(local_root))
+            raise AgentBoxError("Catalog root is not a directory: {}".format(local_root))
         return local_root, None, None
     if not isinstance(storage, dict):
-        raise AiKitError("storage must be an object")
+        raise AgentBoxError("storage must be an object")
     unknown = set(storage) - {"local", "git"}
     if unknown:
-        raise AiKitError("Unknown storage option(s): {}".format(", ".join(sorted(unknown))))
+        raise AgentBoxError("Unknown storage option(s): {}".format(", ".join(sorted(unknown))))
     if not storage:
-        raise AiKitError("storage must enable local, git, or both")
+        raise AgentBoxError("storage must enable local, git, or both")
 
     local_value = storage.get("local")
     git_url = storage.get("git")
     if local_value is not None and (
         not isinstance(local_value, str) or not local_value.strip()
     ):
-        raise AiKitError("storage.local must be a non-empty path string")
+        raise AgentBoxError("storage.local must be a non-empty path string")
     if git_url is not None and (not isinstance(git_url, str) or not git_url.strip()):
-        raise AiKitError("storage.git must be a non-empty repository URL")
+        raise AgentBoxError("storage.git must be a non-empty repository URL")
     if local_value is None and git_url is None:
-        raise AiKitError("storage must enable local, git, or both")
+        raise AgentBoxError("storage must enable local, git, or both")
     if git_url is not None:
         if git_url.startswith("-") or any(character in git_url for character in ("\0", "\n", "\r")):
-            raise AiKitError("storage.git contains an unsafe repository URL")
+            raise AgentBoxError("storage.git contains an unsafe repository URL")
         credential_url = re.match(
             r"^[A-Za-z][A-Za-z0-9+.-]*://[^/]*:[^/]*@", git_url
         ) or re.match(r"^https?://[^/]*@", git_url, re.IGNORECASE)
         if "?" in git_url or "#" in git_url or credential_url:
-            raise AiKitError(
+            raise AgentBoxError(
                 "storage.git must not contain embedded credentials, query parameters, or fragments"
             )
         repository_id = hashlib.sha256(git_url.encode("utf-8")).hexdigest()
@@ -249,14 +249,14 @@ def _parse_storage(config: dict, base: Path) -> tuple[Path | None, str | None, P
         checkout = None
     local_root = expand_path(local_value, base) if local_value is not None else None
     if local_root is not None and local_root.is_symlink():
-        raise AiKitError("Symlinked catalog roots are not supported: {}".format(local_root))
+        raise AgentBoxError("Symlinked catalog roots are not supported: {}".format(local_root))
     if local_root is not None and local_root.exists() and not local_root.is_dir():
-        raise AiKitError("Catalog root is not a directory: {}".format(local_root))
+        raise AgentBoxError("Catalog root is not a directory: {}".format(local_root))
     git_catalog = checkout / "catalog" if checkout is not None else None
     if git_catalog is not None and git_catalog.is_symlink():
-        raise AiKitError("Symlinked catalog roots are not supported: {}".format(git_catalog))
+        raise AgentBoxError("Symlinked catalog roots are not supported: {}".format(git_catalog))
     if git_catalog is not None and git_catalog.exists() and not git_catalog.is_dir():
-        raise AiKitError("Catalog root is not a directory: {}".format(git_catalog))
+        raise AgentBoxError("Catalog root is not a directory: {}".format(git_catalog))
     return local_root, git_url, checkout
 
 
@@ -266,17 +266,17 @@ def load_json(path: Path, default: dict) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise AiKitError("Cannot read {}: {}".format(path, exc))
+        raise AgentBoxError("Cannot read {}: {}".format(path, exc))
 
 
 def load_provider_definitions() -> list[dict]:
     path = Path(__file__).resolve().with_name("providers.json")
     document = load_json(path, {})
     if document.get("version") != PROVIDER_DEFINITIONS_VERSION:
-        raise AiKitError("{} must declare version {}".format(path, PROVIDER_DEFINITIONS_VERSION))
+        raise AgentBoxError("{} must declare version {}".format(path, PROVIDER_DEFINITIONS_VERSION))
     providers = document.get("providers")
     if not isinstance(providers, list) or not providers:
-        raise AiKitError("{} must define providers".format(path))
+        raise AgentBoxError("{} must define providers".format(path))
     seen = set()
     for provider in providers:
         provider_id = provider.get("id") if isinstance(provider, dict) else None
@@ -285,29 +285,29 @@ def load_provider_definitions() -> list[dict]:
             or not CONFIG_NAME.fullmatch(provider_id)
             or provider_id in seen
         ):
-            raise AiKitError("Provider IDs in {} must be valid and unique".format(path))
+            raise AgentBoxError("Provider IDs in {} must be valid and unique".format(path))
         seen.add(provider_id)
         if provider.get("mode") not in ("managed", "detection-only"):
-            raise AiKitError("Invalid provider mode for {}".format(provider_id))
+            raise AgentBoxError("Invalid provider mode for {}".format(provider_id))
         if not isinstance(provider.get("name"), str) or not provider["name"].strip():
-            raise AiKitError("Provider {} must have a name".format(provider_id))
+            raise AgentBoxError("Provider {} must have a name".format(provider_id))
         markers = provider.get("detect")
         if not isinstance(markers, list) or not all(
             isinstance(marker, str) and marker for marker in markers
         ):
-            raise AiKitError("Provider {} must define detection paths".format(provider_id))
+            raise AgentBoxError("Provider {} must define detection paths".format(provider_id))
         if provider["mode"] != "managed":
             continue
         resources = provider.get("resources")
         if not isinstance(resources, dict) or set(resources) != {"skills", "commands"}:
-            raise AiKitError("Managed provider {} must define skills and commands".format(provider_id))
+            raise AgentBoxError("Managed provider {} must define skills and commands".format(provider_id))
         source_ids = set()
         for kind, resource in resources.items():
             if not isinstance(resource, dict) or not isinstance(resource.get("target"), str):
-                raise AiKitError("Invalid {} resource for {}".format(kind, provider_id))
+                raise AgentBoxError("Invalid {} resource for {}".format(kind, provider_id))
             sources = resource.get("sources")
             if not isinstance(sources, list):
-                raise AiKitError("Invalid {} sources for {}".format(kind, provider_id))
+                raise AgentBoxError("Invalid {} sources for {}".format(kind, provider_id))
             for source in sources:
                 source_id = source.get("id") if isinstance(source, dict) else None
                 if (
@@ -316,7 +316,7 @@ def load_provider_definitions() -> list[dict]:
                     or source_id in source_ids
                     or not isinstance(source.get("path"), str)
                 ):
-                    raise AiKitError("Source IDs for {} must be valid and unique".format(provider_id))
+                    raise AgentBoxError("Source IDs for {} must be valid and unique".format(provider_id))
                 source_ids.add(source_id)
     return providers
 
@@ -424,13 +424,13 @@ def write_json(path: Path, value: dict, create_mode: int | None = None) -> None:
 
 def load_config(path: Path, host_override: str | None = None) -> dict:
     if not path.exists():
-        raise AiKitError("No configuration found at {}; run ai-kit ui to complete setup".format(path))
+        raise AgentBoxError("No configuration found at {}; run agentbox ui to complete setup".format(path))
     config = load_json(path, {})
     if config.get("version") != CONFIG_VERSION:
-        raise AiKitError("{} must declare configuration version {}".format(path, CONFIG_VERSION))
+        raise AgentBoxError("{} must declare configuration version {}".format(path, CONFIG_VERSION))
     provider_settings = config.get("providers")
     if not isinstance(provider_settings, dict):
-        raise AiKitError("{} must define provider settings".format(path))
+        raise AgentBoxError("{} must define provider settings".format(path))
     definitions = {
         provider["id"]: provider
         for provider in load_provider_definitions()
@@ -438,19 +438,19 @@ def load_config(path: Path, host_override: str | None = None) -> dict:
     }
     unknown = set(provider_settings) - set(definitions)
     if unknown:
-        raise AiKitError("Unknown provider setting(s): {}".format(", ".join(sorted(unknown))))
+        raise AgentBoxError("Unknown provider setting(s): {}".format(", ".join(sorted(unknown))))
     base = path.parent
     host = (
         host_override
-        or os.environ.get("AI_KIT_HOST")
+        or os.environ.get("AGENTBOX_HOST")
         or config.get("host")
         or socket.gethostname()
     )
     if not isinstance(host, str):
-        raise AiKitError("Host namespace must be a string")
+        raise AgentBoxError("Host namespace must be a string")
     host = re.sub(r"[^A-Za-z0-9._-]+", "-", host).strip(".-_")
     if not host or not CONFIG_NAME.fullmatch(host):
-        raise AiKitError("Invalid host namespace: {!r}".format(host))
+        raise AgentBoxError("Invalid host namespace: {!r}".format(host))
     local_root, git_url, git_checkout = _parse_storage(config, base)
     git_catalog = git_checkout / "catalog" if git_checkout is not None else None
     catalog_root = git_catalog or local_root
@@ -462,11 +462,11 @@ def load_config(path: Path, host_override: str | None = None) -> dict:
     ):
         catalog_root = local_root
     if catalog_root is None:  # Defensive: _parse_storage requires at least one destination.
-        raise AiKitError("No storage destination is configured")
+        raise AgentBoxError("No storage destination is configured")
     if local_root is not None and local_root.is_symlink():
-        raise AiKitError("Symlinked catalog roots are not supported: {}".format(local_root))
+        raise AgentBoxError("Symlinked catalog roots are not supported: {}".format(local_root))
     if git_catalog is not None and git_catalog.is_symlink():
-        raise AiKitError("Symlinked catalog roots are not supported: {}".format(git_catalog))
+        raise AgentBoxError("Symlinked catalog roots are not supported: {}".format(git_catalog))
     config["_base"] = base
     config["_host"] = host
     config["_storage_local"] = local_root
@@ -476,7 +476,7 @@ def load_config(path: Path, host_override: str | None = None) -> dict:
     config["_catalog_root"] = catalog_root
     config["_catalog"] = config["_catalog_root"] / host
     if config["_catalog"].is_symlink():
-        raise AiKitError("Symlinked host catalogs are not supported: {}".format(config["_catalog"]))
+        raise AgentBoxError("Symlinked host catalogs are not supported: {}".format(config["_catalog"]))
     state_file = config.get("state_file")
     safety_backups = config.get("safety_backups")
     config["_state_file"] = (
@@ -491,21 +491,21 @@ def load_config(path: Path, host_override: str | None = None) -> dict:
     for tool_name, definition in definitions.items():
         setting = provider_settings.get(tool_name, {})
         if not isinstance(setting, dict) or not isinstance(setting.get("enabled", False), bool):
-            raise AiKitError("Invalid provider setting for {}".format(tool_name))
+            raise AgentBoxError("Invalid provider setting for {}".format(tool_name))
         resource_settings = setting.get("resources", {})
         if not isinstance(resource_settings, dict) or set(resource_settings) - {
             "skills",
             "commands",
         }:
-            raise AiKitError("Invalid resource settings for {}".format(tool_name))
+            raise AgentBoxError("Invalid resource settings for {}".format(tool_name))
         if not all(isinstance(value, bool) for value in resource_settings.values()):
-            raise AiKitError("Resource settings for {} must be boolean".format(tool_name))
+            raise AgentBoxError("Resource settings for {} must be boolean".format(tool_name))
         if not setting.get("enabled", False) and any(resource_settings.values()):
-            raise AiKitError(
+            raise AgentBoxError(
                 "Disabled provider {} cannot have enabled resources".format(tool_name)
             )
         if setting.get("enabled", False) and not any(resource_settings.values()):
-            raise AiKitError("Enabled provider {} must enable a resource".format(tool_name))
+            raise AgentBoxError("Enabled provider {} must enable a resource".format(tool_name))
         if not setting.get("enabled", False) or not any(resource_settings.values()):
             continue
         tool = {"_name": definition["name"], "_description": definition.get("description", "")}
@@ -525,7 +525,7 @@ def load_config(path: Path, host_override: str | None = None) -> dict:
             }
         tools[tool_name] = tool
     if not tools:
-        raise AiKitError("{} must enable at least one provider resource".format(path))
+        raise AgentBoxError("{} must enable at least one provider resource".format(path))
     config["tools"] = tools
     config["_provider_definitions"] = definitions
     return config
@@ -533,12 +533,12 @@ def load_config(path: Path, host_override: str | None = None) -> dict:
 
 def config_for_host(config: dict, host: str) -> dict:
     if not CONFIG_NAME.fullmatch(host):
-        raise AiKitError("Invalid host namespace: {!r}".format(host))
+        raise AgentBoxError("Invalid host namespace: {!r}".format(host))
     selected = dict(config)
     selected["_host"] = host
     selected["_catalog"] = config["_catalog_root"] / host
     if selected["_catalog"].is_symlink():
-        raise AiKitError("Symlinked host catalogs are not supported: {}".format(selected["_catalog"]))
+        raise AgentBoxError("Symlinked host catalogs are not supported: {}".format(selected["_catalog"]))
     return selected
 
 
@@ -547,15 +547,15 @@ def catalog_hosts(config: dict) -> list[str]:
     if not root.exists():
         return []
     if not root.is_dir():
-        raise AiKitError("Catalog root is not a directory: {}".format(root))
+        raise AgentBoxError("Catalog root is not a directory: {}".format(root))
     hosts = []
     for entry in sorted(root.iterdir()):
         if entry.is_symlink():
-            raise AiKitError("Symlinked host catalogs are not supported: {}".format(entry))
+            raise AgentBoxError("Symlinked host catalogs are not supported: {}".format(entry))
         if not entry.is_dir():
             continue
         if not CONFIG_NAME.fullmatch(entry.name):
-            raise AiKitError("Invalid host catalog name: {}".format(entry.name))
+            raise AgentBoxError("Invalid host catalog name: {}".format(entry.name))
         hosts.append(entry.name)
     return hosts
 
@@ -598,13 +598,13 @@ def _run_git(
             env=environment,
         )
     except FileNotFoundError:
-        raise AiKitError("Git storage requires the git executable") from None
+        raise AgentBoxError("Git storage requires the git executable") from None
     except subprocess.TimeoutExpired:
-        raise AiKitError("Git storage operation timed out for <repository>") from None
+        raise AgentBoxError("Git storage operation timed out for <repository>") from None
     except OSError as exc:
-        raise AiKitError("Cannot run Git for <repository>: {}".format(exc)) from exc
+        raise AgentBoxError("Cannot run Git for <repository>: {}".format(exc)) from exc
     if result.returncode not in allowed:
-        raise AiKitError(_git_error_output(result, url))
+        raise AgentBoxError(_git_error_output(result, url))
     return result
 
 
@@ -630,10 +630,10 @@ def _git_revision(checkout: Path, url: str) -> str | None:
 
 def _validate_managed_repository(checkout: Path, url: str) -> None:
     if any(path.is_file() or path.is_symlink() for path in checkout.rglob(".gitattributes")):
-        raise AiKitError("Managed Git repositories must not define .gitattributes files")
+        raise AgentBoxError("Managed Git repositories must not define .gitattributes files")
     catalog = checkout / "catalog"
     if catalog.exists() and any(catalog.rglob(".git")):
-        raise AiKitError("Managed Git catalogs must not contain embedded repositories")
+        raise AgentBoxError("Managed Git catalogs must not contain embedded repositories")
 
 
 def _validate_git_tree(checkout: Path, reference: str, url: str) -> None:
@@ -643,26 +643,26 @@ def _validate_git_tree(checkout: Path, reference: str, url: str) -> None:
         mode = metadata.split(" ", 1)[0]
         parts = Path(path).parts
         if ".gitattributes" in parts:
-            raise AiKitError("Managed Git repositories must not define .gitattributes files")
+            raise AgentBoxError("Managed Git repositories must not define .gitattributes files")
         if mode == "160000" and parts and parts[0] == "catalog":
-            raise AiKitError("Managed Git catalogs must not contain embedded repositories")
+            raise AgentBoxError("Managed Git catalogs must not contain embedded repositories")
     index = _run_git(checkout, ("ls-files", "--stage", "--", "catalog"), url)
     if any(line.startswith("160000 ") for line in index.stdout.splitlines()):
-        raise AiKitError("Managed Git catalogs must not contain embedded repositories")
+        raise AgentBoxError("Managed Git catalogs must not contain embedded repositories")
 
 
 def _ensure_git_checkout(config: dict) -> tuple[str, str | None, bool]:
     checkout = config["_storage_git_checkout"]
     url = config["_storage_git_url"]
     if checkout is None or url is None:
-        raise AiKitError("Git storage is not configured")
+        raise AgentBoxError("Git storage is not configured")
     parent = checkout.parent
     try:
         parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError as exc:
-        raise AiKitError("Cannot create managed Git storage: {}".format(exc)) from exc
+        raise AgentBoxError("Cannot create managed Git storage: {}".format(exc)) from exc
     if parent.is_symlink() or not parent.is_dir():
-        raise AiKitError("Managed Git storage root is not a regular directory: {}".format(parent))
+        raise AgentBoxError("Managed Git storage root is not a regular directory: {}".format(parent))
 
     if not checkout.exists():
         temporary = checkout.with_name(".{}-clone-{}".format(checkout.name, uuid.uuid4().hex))
@@ -692,21 +692,21 @@ def _ensure_git_checkout(config: dict) -> tuple[str, str | None, bool]:
                 remove_path(temporary)
             raise
     if checkout.is_symlink() or not checkout.is_dir():
-        raise AiKitError("Managed Git checkout is not a regular directory: {}".format(checkout))
+        raise AgentBoxError("Managed Git checkout is not a regular directory: {}".format(checkout))
     git_directory = checkout / ".git"
     if git_directory.is_symlink() or not git_directory.is_dir():
-        raise AiKitError("Managed storage is not a Git working tree: {}".format(checkout))
+        raise AgentBoxError("Managed storage is not a Git working tree: {}".format(checkout))
 
     configured_remote = _run_git(checkout, ("remote", "get-url", "origin"), url).stdout.strip()
     if configured_remote != url:
-        raise AiKitError("Managed Git checkout origin does not match the configured repository")
+        raise AgentBoxError("Managed Git checkout origin does not match the configured repository")
     dirty = _run_git(checkout, ("status", "--porcelain", "--untracked-files=all"), url)
     if dirty.stdout.strip():
-        raise AiKitError("Managed Git checkout contains uncommitted changes")
+        raise AgentBoxError("Managed Git checkout contains uncommitted changes")
 
     branch = _run_git(checkout, ("symbolic-ref", "--quiet", "--short", "HEAD"), url).stdout.strip()
     if not branch:
-        raise AiKitError("Managed Git checkout must use an attached branch")
+        raise AgentBoxError("Managed Git checkout must use an attached branch")
     _run_git(checkout, ("fetch", "--prune", "origin"), url)
     remote_ref = "refs/remotes/origin/{}".format(branch)
     local_revision = _git_revision(checkout, url)
@@ -730,7 +730,7 @@ def _ensure_git_checkout(config: dict) -> tuple[str, str | None, bool]:
                     allowed=(0, 1),
                 )
                 if remote_is_ancestor.returncode != 0:
-                    raise AiKitError(
+                    raise AgentBoxError(
                         "Managed Git checkout has diverged from origin/{}".format(branch)
                     )
                 pending = True
@@ -746,11 +746,11 @@ def _ensure_git_checkout(config: dict) -> tuple[str, str | None, bool]:
 
 def catalog_fingerprint(root: Path) -> tuple[bool, str]:
     if root.is_symlink():
-        raise AiKitError("Symlinked catalog roots are not supported: {}".format(root))
+        raise AgentBoxError("Symlinked catalog roots are not supported: {}".format(root))
     if not root.exists():
         return True, hashlib.sha256(b"").hexdigest()
     if not root.is_dir():
-        raise AiKitError("Catalog root is not a directory: {}".format(root))
+        raise AgentBoxError("Catalog root is not a directory: {}".format(root))
     entries = sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix())
     if not entries:
         return True, hashlib.sha256(b"").hexdigest()
@@ -758,14 +758,14 @@ def catalog_fingerprint(root: Path) -> tuple[bool, str]:
     for entry in entries:
         relative = entry.relative_to(root).as_posix()
         if entry.is_symlink():
-            raise AiKitError("Symlinked catalog paths are not supported: {}".format(entry))
+            raise AgentBoxError("Symlinked catalog paths are not supported: {}".format(entry))
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
         if entry.is_dir():
             digest.update(b"directory\0")
             continue
         if not entry.is_file():
-            raise AiKitError("Unsupported catalog path: {}".format(entry))
+            raise AgentBoxError("Unsupported catalog path: {}".format(entry))
         digest.update(b"file\0")
         digest.update(b"executable\0" if entry.stat().st_mode & 0o111 else b"regular\0")
         with entry.open("rb") as source:
@@ -779,7 +779,7 @@ def _select_catalog_root(config: dict, root: Path) -> None:
     config["_catalog_root"] = root
     config["_catalog"] = root / config["_host"]
     if config["_catalog"].is_symlink():
-        raise AiKitError("Symlinked host catalogs are not supported: {}".format(config["_catalog"]))
+        raise AgentBoxError("Symlinked host catalogs are not supported: {}".format(config["_catalog"]))
 
 
 def prepare_storage(
@@ -790,7 +790,7 @@ def prepare_storage(
     git_root = config["_storage_git_catalog"]
     if git_root is None:
         if local_root is None:
-            raise AiKitError("No storage destination is configured")
+            raise AgentBoxError("No storage destination is configured")
         _select_catalog_root(config, local_root)
         return StorageSession(config, local_root, None, local_root)
 
@@ -804,7 +804,7 @@ def prepare_storage(
     if pending:
         report(OperationEvent("storage", "GIT PENDING COMMIT AWAITS CONFIRMED BACKUP"))
     if git_root.is_symlink():
-        raise AiKitError("Symlinked catalog roots are not supported: {}".format(git_root))
+        raise AgentBoxError("Symlinked catalog roots are not supported: {}".format(git_root))
     if local_root is None:
         _select_catalog_root(config, git_root)
         return StorageSession(
@@ -821,7 +821,7 @@ def prepare_storage(
     git_empty, git_hash = catalog_fingerprint(git_root)
     initialize = None
     if not local_empty and not git_empty and local_hash != git_hash:
-        raise AiKitError(
+        raise AgentBoxError(
             "Local and Git catalogs differ; make them equal or deactivate one storage destination"
         )
     if not local_empty and git_empty:
@@ -868,29 +868,29 @@ def update_hash_entry(
 
 def validate_regular_payload(path: Path) -> None:
     if path.is_symlink():
-        raise AiKitError("Symlinked artifacts are not supported: {}".format(path))
+        raise AgentBoxError("Symlinked artifacts are not supported: {}".format(path))
     if path.is_file():
         return
     if not path.is_dir():
-        raise AiKitError("Unsupported payload: {}".format(path))
+        raise AgentBoxError("Unsupported payload: {}".format(path))
     for current, directories, files in os.walk(str(path), followlinks=False):
         current_path = Path(current)
         for name in directories + files:
             child = current_path / name
             if child.is_symlink():
-                raise AiKitError("Symlinked artifact content is not supported: {}".format(child))
+                raise AgentBoxError("Symlinked artifact content is not supported: {}".format(child))
             if not child.is_dir() and not child.is_file():
-                raise AiKitError("Unsupported artifact content: {}".format(child))
+                raise AgentBoxError("Unsupported artifact content: {}".format(child))
 
 
 def validate_git_payload(path: Path) -> None:
     if path.is_file():
         if path.name == ".gitattributes":
-            raise AiKitError("Git storage does not support artifact content named {}".format(path))
+            raise AgentBoxError("Git storage does not support artifact content named {}".format(path))
         return
     for child in path.rglob("*"):
         if child.name in (".git", ".gitattributes"):
-            raise AiKitError("Git storage does not support artifact content named {}".format(child))
+            raise AgentBoxError("Git storage does not support artifact content named {}".format(child))
 
 
 def hash_path(path: Path) -> str:
@@ -980,10 +980,10 @@ def read_skill_name(skill_dir: Path) -> str:
     try:
         metadata, _ = split_frontmatter(skill_file.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError) as exc:
-        raise AiKitError("Cannot read {}: {}".format(skill_file, exc))
+        raise AgentBoxError("Cannot read {}: {}".format(skill_file, exc))
     name = metadata.get("name", skill_dir.name).strip()
     if not SKILL_NAME.fullmatch(name):
-        raise AiKitError("Invalid skill name {!r} in {}".format(name, skill_file))
+        raise AgentBoxError("Invalid skill name {!r} in {}".format(name, skill_file))
     return name
 
 
@@ -992,13 +992,13 @@ def command_name(relative_path: str) -> str:
     raw = "-".join(path.with_suffix("").parts).lower()
     name = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
     if not name:
-        raise AiKitError("Cannot derive a skill name from {}".format(relative_path))
+        raise AgentBoxError("Cannot derive a skill name from {}".format(relative_path))
     return name
 
 
 def walk_skill_dirs(root: Path) -> Iterable[Path]:
     def walk_error(error: OSError) -> None:
-        raise AiKitError("Cannot scan skill source {}: {}".format(root, error))
+        raise AgentBoxError("Cannot scan skill source {}: {}".format(root, error))
 
     for current, directories, files in os.walk(
         str(root), followlinks=False, onerror=walk_error
@@ -1025,38 +1025,38 @@ def source_record(source: Source) -> dict:
 
 def safe_relative_path(value: str) -> Path:
     if not isinstance(value, str) or not value:
-        raise AiKitError("Manifest paths must be non-empty strings")
+        raise AgentBoxError("Manifest paths must be non-empty strings")
     path = Path(value)
     if path == Path(".") or path.is_absolute() or ".." in path.parts:
-        raise AiKitError("Unsafe relative path in manifest: {}".format(value))
+        raise AgentBoxError("Unsafe relative path in manifest: {}".format(value))
     return path
 
 
 def checked_join(root: Path, relative: Path) -> Path:
     if relative.is_absolute() or ".." in relative.parts:
-        raise AiKitError("Unsafe relative path: {}".format(relative))
+        raise AgentBoxError("Unsafe relative path: {}".format(relative))
     current = root
     for part in relative.parts[:-1]:
         current = current / part
         if current.is_symlink():
-            raise AiKitError("Refusing path through symlink: {}".format(current))
+            raise AgentBoxError("Refusing path through symlink: {}".format(current))
     candidate = root / relative
     root_real = root.resolve(strict=False)
     parent_real = candidate.parent.resolve(strict=False)
     try:
         common = Path(os.path.commonpath([str(root_real), str(parent_real)]))
     except ValueError:
-        raise AiKitError("Path escapes configured root: {}".format(candidate))
+        raise AgentBoxError("Path escapes configured root: {}".format(candidate))
     if common != root_real:
-        raise AiKitError("Path escapes configured root: {}".format(candidate))
+        raise AgentBoxError("Path escapes configured root: {}".format(candidate))
     return candidate
 
 
 def require_regular_root(root: Path, label: str) -> None:
     if root.is_symlink():
-        raise AiKitError("Symlinked {} roots are not supported: {}".format(label, root))
+        raise AgentBoxError("Symlinked {} roots are not supported: {}".format(label, root))
     if root.exists() and not root.is_dir():
-        raise AiKitError("{} root is not a directory: {}".format(label.capitalize(), root))
+        raise AgentBoxError("{} root is not a directory: {}".format(label.capitalize(), root))
 
 
 def load_state(config: dict) -> dict:
@@ -1104,7 +1104,7 @@ def receipt_has_current_origin(config: dict, receipt: dict) -> bool:
             artifact = Artifact(tool, kind, name, relative.as_posix(), payload, host=host)
             if artifact_portable_fingerprint(artifact) == expected:
                 return True
-        except (AiKitError, ValueError):
+        except (AgentBoxError, ValueError):
             continue
     return False
 
@@ -1155,7 +1155,7 @@ def collect_tool_artifacts(
                     current_hash = hash_path(physical_path)
                     if current_hash != receipt.get("hash") and not include_derived:
                         errors.append(
-                            "{} was restored by ai-kit and then modified; use --include-derived "
+                            "{} was restored by agentbox and then modified; use --include-derived "
                             "to back it up as an independent artifact".format(physical_path)
                         )
                         continue
@@ -1242,42 +1242,42 @@ def load_manifest(config: dict, tool_name: str) -> dict:
     tool_root = config["_catalog"] / tool_name
     path = manifest_path(config, tool_name)
     if tool_root.is_symlink() or path.is_symlink():
-        raise AiKitError("Symlinked catalog paths are not supported for {}".format(tool_name))
+        raise AgentBoxError("Symlinked catalog paths are not supported for {}".format(tool_name))
     manifest = load_json(path, {"version": VERSION, "artifacts": []})
     if manifest.get("version") != VERSION:
-        raise AiKitError("Unsupported manifest version for {}".format(tool_name))
+        raise AgentBoxError("Unsupported manifest version for {}".format(tool_name))
     artifacts = manifest.setdefault("artifacts", [])
     if not isinstance(artifacts, list):
-        raise AiKitError("Manifest artifacts for {} must be a list".format(tool_name))
+        raise AgentBoxError("Manifest artifacts for {} must be a list".format(tool_name))
     seen_paths = set()
     for entry in artifacts:
         if not isinstance(entry, dict) or entry.get("kind") not in ("skill", "command"):
-            raise AiKitError("Invalid artifact entry in {} manifest".format(tool_name))
+            raise AgentBoxError("Invalid artifact entry in {} manifest".format(tool_name))
         name = entry.get("name")
         if not isinstance(name, str) or not SKILL_NAME.fullmatch(name):
-            raise AiKitError("Invalid artifact name in {} manifest: {!r}".format(tool_name, name))
+            raise AgentBoxError("Invalid artifact name in {} manifest: {!r}".format(tool_name, name))
         entry_path = safe_relative_path(entry.get("path"))
         if entry_path in seen_paths:
-            raise AiKitError("Duplicate artifact path in {} manifest: {}".format(tool_name, entry_path))
+            raise AgentBoxError("Duplicate artifact path in {} manifest: {}".format(tool_name, entry_path))
         seen_paths.add(entry_path)
         if entry["kind"] == "skill":
             expected = Path("skills") / name
             if entry_path != expected:
-                raise AiKitError(
+                raise AgentBoxError(
                     "Skill manifest path must be {}: {}".format(expected, entry_path)
                 )
         elif entry_path.parts[0] != "commands" or entry_path.suffix != ".md":
-            raise AiKitError("Command manifest path must be under commands/: {}".format(entry_path))
+            raise AgentBoxError("Command manifest path must be under commands/: {}".format(entry_path))
         sources = entry.get("sources", [])
         if not isinstance(sources, list):
-            raise AiKitError("Artifact sources must be a list: {}".format(entry_path))
+            raise AgentBoxError("Artifact sources must be a list: {}".format(entry_path))
         for source in sources:
             if (
                 not isinstance(source, dict)
                 or not isinstance(source.get("id"), str)
                 or not CONFIG_NAME.fullmatch(source["id"])
             ):
-                raise AiKitError("Invalid source entry for {}".format(entry_path))
+                raise AgentBoxError("Invalid source entry for {}".format(entry_path))
             safe_relative_path(source.get("relative_path"))
     return manifest
 
@@ -1290,7 +1290,7 @@ def remove_path(path: Path) -> None:
 
 
 def install_staged(staged: Path, destination: Path, token: str) -> None:
-    previous = destination.with_name(".{}.ai-kit-old-{}".format(destination.name, token))
+    previous = destination.with_name(".{}.agentbox-old-{}".format(destination.name, token))
     had_destination = destination.exists() or destination.is_symlink()
     if had_destination:
         destination.rename(previous)
@@ -1308,7 +1308,7 @@ def install_staged(staged: Path, destination: Path, token: str) -> None:
 def _staged_destination(destination: Path):
     destination.parent.mkdir(parents=True, exist_ok=True)
     token = uuid.uuid4().hex
-    staged = destination.with_name(".{}.ai-kit-new-{}".format(destination.name, token))
+    staged = destination.with_name(".{}.agentbox-new-{}".format(destination.name, token))
     try:
         yield staged, token
     finally:
@@ -1335,7 +1335,7 @@ def replace_catalog(source: Path, destination: Path) -> None:
 
 @contextmanager
 def staged_catalog(source: Path):
-    with tempfile.TemporaryDirectory(prefix="ai-kit-catalog-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="agentbox-catalog-") as temporary:
         staged = Path(temporary) / "catalog"
         if source.exists():
             copy_exact(source, staged)
@@ -1393,9 +1393,9 @@ def commit_git_catalog(
     branch = session.git_branch
     git_root = session.git_root
     if checkout is None or url is None or branch is None or git_root is None:
-        raise AiKitError("Git storage is not prepared")
+        raise AgentBoxError("Git storage is not prepared")
     revision = _git_revision(checkout, url)
-    with tempfile.TemporaryDirectory(prefix="ai-kit-git-rollback-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="agentbox-git-rollback-") as temporary:
         snapshot = Path(temporary) / "catalog"
         snapshot_exists = git_root.exists()
         if snapshot_exists:
@@ -1431,16 +1431,16 @@ def commit_git_catalog(
                     return False
                 commit = revision
             else:
-                message = "AI Kit catalog backup {}".format(
+                message = "AgentBox catalog backup {}".format(
                     datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
                 )
                 _run_git(
                     checkout,
                     (
                         "-c",
-                        "user.name=AI Kit",
+                        "user.name=AgentBox",
                         "-c",
-                        "user.email=ai-kit@localhost",
+                        "user.email=agentbox@localhost",
                         "-c",
                         "commit.gpgsign=false",
                         "commit",
@@ -1454,7 +1454,7 @@ def commit_git_catalog(
                 )
                 commit = _git_revision(checkout, url)
             if commit is None:
-                raise AiKitError("Git did not create a catalog commit")
+                raise AgentBoxError("Git did not create a catalog commit")
             try:
                 _run_git(
                     checkout,
@@ -1462,7 +1462,7 @@ def commit_git_catalog(
                     url,
                 )
                 pushed = True
-            except AiKitError as push_error:
+            except AgentBoxError as push_error:
                 remote_ref = "refs/remotes/origin/{}".format(branch)
                 try:
                     _run_git(checkout, ("fetch", "origin"), url)
@@ -1477,10 +1477,10 @@ def commit_git_catalog(
                             ).returncode
                             == 0
                         )
-                except AiKitError:
+                except AgentBoxError:
                     uncertain = True
                     session.git_uncertain = True
-                    raise AiKitError(
+                    raise AgentBoxError(
                         "Git push outcome is uncertain; the managed commit was preserved and "
                         "will be checked on the next operation"
                     ) from push_error
@@ -1498,7 +1498,7 @@ def commit_git_catalog(
                 try:
                     _rollback_git_checkout(session, snapshot, snapshot_exists, revision)
                 except Exception as rollback_error:
-                    raise AiKitError(
+                    raise AgentBoxError(
                         "Git storage failed and its managed checkout could not be restored: {}".format(
                             rollback_error
                         )
@@ -1512,11 +1512,11 @@ def initialize_storage_for_restore(
 ) -> None:
     if session.initialize == "git-from-local":
         if session.local_root is None:
-            raise AiKitError("Local storage is unavailable for Git initialization")
+            raise AgentBoxError("Local storage is unavailable for Git initialization")
         commit_git_catalog(session, session.local_root, report)
     elif session.initialize == "local-from-git":
         if session.local_root is None or session.git_root is None:
-            raise AiKitError("Dual storage is unavailable for local initialization")
+            raise AgentBoxError("Dual storage is unavailable for local initialization")
         replace_catalog(session.git_root, session.local_root)
 
 
@@ -1556,7 +1556,7 @@ def validate_backup_update(
         )
         if not destination.exists() or hash_path(destination) != hash_path(artifact.payload):
             labels = ", ".join(sorted({source["id"] for source in unavailable}))
-            raise AiKitError(
+            raise AgentBoxError(
                 "Refusing to update {} while recorded source(s) {} are unavailable; "
                 "restore or reconnect those sources first".format(artifact.catalog_path, labels)
             )
@@ -1677,7 +1677,7 @@ def scan_catalog(config: dict, source_tools: Sequence[str]) -> list[Artifact]:
     for tool_name in source_tools:
         root = config["_catalog"] / tool_name
         if root.is_symlink():
-            raise AiKitError("Symlinked catalog paths are not supported for {}".format(tool_name))
+            raise AgentBoxError("Symlinked catalog paths are not supported for {}".format(tool_name))
         skills = root / "skills"
         if config["tools"][tool_name]["skills"]["_enabled"] and skills.exists():
             validate_regular_payload(skills)
@@ -1725,7 +1725,7 @@ def convert_command(artifact: Artifact) -> bytes:
     try:
         content = artifact.payload.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        raise AiKitError("Cannot convert {}: {}".format(artifact.payload, exc))
+        raise AgentBoxError("Cannot convert {}: {}".format(artifact.payload, exc))
     metadata, body = split_frontmatter(content)
     description = metadata.get(
         "description", "Run the {} workflow.".format(artifact.name.replace("-", " "))
@@ -1832,18 +1832,18 @@ def prepare_portable_restore(
     force: bool,
 ) -> list[tuple[Candidate, Path, str, bool]]:
     if not config["tools"][target_tool]["skills"]["_enabled"]:
-        raise AiKitError("Portable restore requires skills enabled for {}".format(target_tool))
+        raise AgentBoxError("Portable restore requires skills enabled for {}".format(target_tool))
     artifacts = scan_catalog_hosts(config, source_hosts, source_tools)
     candidates, errors = build_candidates(artifacts)
     if errors:
-        raise AiKitError("\n".join(errors))
+        raise AgentBoxError("\n".join(errors))
     target_root = config["tools"][target_tool]["skills"]["_target"]
     require_regular_root(target_root, "restore target")
     operations = []
     for candidate in candidates:
         destination = checked_join(target_root, Path(candidate.name))
         if destination.is_symlink() and not force:
-            raise AiKitError(
+            raise AgentBoxError(
                 "Refusing to replace symlink {} without --force".format(destination)
             )
         candidate_hash = candidate.fingerprint()
@@ -1915,7 +1915,7 @@ def validate_portable_target_operations(
             key = str(destination.absolute())
             previous = destinations.get(key)
             if previous and previous != target_tool:
-                raise AiKitError(
+                raise AgentBoxError(
                     "Restore targets {} and {} both map to {}; restore them separately "
                     "or configure distinct target roots".format(
                         previous, target_tool, destination
@@ -1950,7 +1950,7 @@ def prepare_exact_restore(
         entry_path = safe_relative_path(entry["path"])
         payload = checked_join(tool_root, entry_path)
         if not payload.exists():
-            raise AiKitError("Catalog payload is missing: {}".format(payload))
+            raise AgentBoxError("Catalog payload is missing: {}".format(payload))
         payload_hash = hash_path(payload)
         destinations = []
         for source in entry.get("sources", []):
@@ -1985,12 +1985,12 @@ def prepare_exact_restore(
                 continue
             seen_destinations.add(destination_key)
             if destination.is_symlink() and not force:
-                raise AiKitError(
+                raise AgentBoxError(
                     "Refusing to replace symlink {} without --force".format(destination)
                 )
             previous_payload = claimed_destinations.get(destination_key)
             if previous_payload and previous_payload != str(payload):
-                raise AiKitError(
+                raise AgentBoxError(
                     "Multiple exact artifacts target {}: {} and {}".format(
                         destination, previous_payload, payload
                     )
@@ -2025,7 +2025,7 @@ def combine_exact_operations(
             if existing:
                 existing_fingerprint, existing_payload = existing
                 if fingerprint != existing_fingerprint:
-                    raise AiKitError(
+                    raise AgentBoxError(
                         "Exact artifacts from different catalog selections both target {}: "
                         "{} and {}".format(destination, existing_payload, payload)
                     )
@@ -2154,21 +2154,21 @@ def status_tool(
 def _operation_lock(identity: Path):
     resolved = identity.expanduser().resolve()
     if hasattr(os, "getuid"):
-        lock_root = Path("/tmp") / "ai-kit-locks-{}".format(os.getuid())
+        lock_root = Path("/tmp") / "agentbox-locks-{}".format(os.getuid())
     else:  # pragma: no cover - exercised on Windows.
         local_app_data = os.environ.get("LOCALAPPDATA")
         base = Path(local_app_data) if local_app_data else Path(tempfile.gettempdir())
-        lock_root = base / "AI Kit" / "locks"
+        lock_root = base / "AgentBox" / "locks"
     try:
         lock_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         if lock_root.is_symlink() or not lock_root.is_dir():
-            raise AiKitError("Operation lock root is not a regular directory: {}".format(lock_root))
+            raise AgentBoxError("Operation lock root is not a regular directory: {}".format(lock_root))
         if hasattr(os, "getuid") and lock_root.stat().st_uid != os.getuid():
-            raise AiKitError("Operation lock root has an unexpected owner: {}".format(lock_root))
+            raise AgentBoxError("Operation lock root has an unexpected owner: {}".format(lock_root))
         lock_name = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest() + ".lock"
         lock_handle = (lock_root / lock_name).open("a+b")
     except OSError as exc:
-        raise AiKitError("Cannot lock {}: {}".format(resolved, exc))
+        raise AgentBoxError("Cannot lock {}: {}".format(resolved, exc))
     with lock_handle:
         if fcntl is not None:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
@@ -2185,7 +2185,7 @@ def _operation_lock(identity: Path):
                 except OSError:
                     time.sleep(0.05)
         else:  # pragma: no cover - supported platforms provide one implementation.
-            raise AiKitError("This platform does not provide filesystem operation locking")
+            raise AgentBoxError("This platform does not provide filesystem operation locking")
         try:
             yield
         finally:
@@ -2217,13 +2217,13 @@ def _run_catalog_operation(
 ) -> int:
     tool_names = sorted(config["tools"])
     if request.action not in ("backup", "restore", "status"):
-        raise AiKitError("Unknown action: {}".format(request.action))
+        raise AgentBoxError("Unknown action: {}".format(request.action))
     if request.tool != "all" and request.tool not in tool_names:
-        raise AiKitError("Unknown tool: {}".format(request.tool))
+        raise AgentBoxError("Unknown tool: {}".format(request.tool))
     if request.source_tool and request.source_tool not in tool_names:
-        raise AiKitError("Unknown source tool: {}".format(request.source_tool))
+        raise AgentBoxError("Unknown source tool: {}".format(request.source_tool))
     if request.source_tool and request.all_tools:
-        raise AiKitError("A source tool and all tools cannot both be selected")
+        raise AgentBoxError("A source tool and all tools cannot both be selected")
 
     state = load_state(config)
     selected = tool_names if request.tool == "all" else [request.tool]
@@ -2234,7 +2234,7 @@ def _run_catalog_operation(
             if config["tools"][tool_name]["skills"]["_enabled"]
         ]
         if not selected:
-            raise AiKitError("Portable restore requires at least one provider with skills enabled")
+            raise AgentBoxError("Portable restore requires at least one provider with skills enabled")
     total = 0
     if request.action == "backup":
         prepared = []
@@ -2257,7 +2257,7 @@ def _run_catalog_operation(
             all_errors.extend(errors)
             receipts_to_clear.extend(clear)
         if all_errors:
-            raise AiKitError("\n".join(all_errors))
+            raise AgentBoxError("\n".join(all_errors))
         for tool_name, artifacts, available_sources in prepared:
             if config["_storage_git_url"] is not None:
                 for artifact in artifacts:
@@ -2284,7 +2284,7 @@ def _run_catalog_operation(
     if request.action == "restore":
         source_hosts = catalog_hosts(config) if request.all_hosts else [config["_host"]]
         if request.as_backed_up and (request.source_tool or request.all_tools):
-            raise AiKitError(
+            raise AgentBoxError(
                 "--from and --all-tools cannot be combined with --as-backed-up"
             )
         if request.as_backed_up:
@@ -2347,7 +2347,7 @@ def _file_snapshot(path: Path) -> tuple[bool, bytes, int]:
     if not path.exists():
         return False, b"", 0
     if path.is_symlink() or not path.is_file():
-        raise AiKitError("State path is not a regular file: {}".format(path))
+        raise AgentBoxError("State path is not a regular file: {}".format(path))
     return True, path.read_bytes(), stat.S_IMODE(path.stat().st_mode)
 
 
@@ -2382,12 +2382,12 @@ def _configured_storage_update(config_path: Path, request: OperationRequest) -> 
 
 def write_config(path: Path, value: dict) -> None:
     if path.is_symlink():
-        raise AiKitError("Symlinked configuration files are not supported: {}".format(path))
+        raise AgentBoxError("Symlinked configuration files are not supported: {}".format(path))
     for parent in (path.parent, *path.parents):
         if parent.is_symlink():
-            raise AiKitError("Symlinked configuration directories are not supported: {}".format(parent))
+            raise AgentBoxError("Symlinked configuration directories are not supported: {}".format(parent))
         if parent.exists() and not parent.is_dir():
-            raise AiKitError("Configuration parent is not a directory: {}".format(parent))
+            raise AgentBoxError("Configuration parent is not a directory: {}".format(parent))
     write_json(path, value, create_mode=0o600)
 
 
@@ -2404,9 +2404,9 @@ def _configured_provider_update(config_path: Path, request: OperationRequest) ->
         for kind in ("skills", "commands")
     }
     if not selected or selected - valid:
-        raise AiKitError("Select at least one valid provider resource")
+        raise AgentBoxError("Select at least one valid provider resource")
     if request.storage_local is None and request.storage_git is None:
-        raise AiKitError("Select local storage, Git storage, or both")
+        raise AgentBoxError("Select local storage, Git storage, or both")
     candidate = load_json(config_path, {}) if config_path.exists() else {}
     candidate.pop("tools", None)
     candidate["version"] = CONFIG_VERSION
@@ -2550,7 +2550,7 @@ def run_operation(
             if {
                 item.expanduser().resolve() for item in storage_lock_identities(current)
             } != {item.expanduser().resolve() for item in locked_identities}:
-                raise AiKitError("Storage configuration changed while waiting; retry the operation")
+                raise AgentBoxError("Storage configuration changed while waiting; retry the operation")
             return run_operation(
                 config_path,
                 request,
@@ -2564,7 +2564,7 @@ def run_operation(
         return configure_storage(config_path, request, report, pre_plan, pre_apply)
     config = load_config(config_path, request.host)
     if request.action not in ("backup", "restore", "status"):
-        raise AiKitError("Unknown action: {}".format(request.action))
+        raise AgentBoxError("Unknown action: {}".format(request.action))
     session = prepare_storage(config, report)
     if pre_plan is not None:
         pre_plan()
@@ -2616,7 +2616,7 @@ def run_operation(
                     except Exception as exc:
                         rollback_errors.append(exc)
                 if rollback_errors:
-                    raise AiKitError(
+                    raise AgentBoxError(
                         "Storage operation failed and rollback was incomplete: {}".format(
                             "; ".join(str(error) for error in rollback_errors)
                         )

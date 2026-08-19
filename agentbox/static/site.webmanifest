@@ -1,6 +1,6 @@
 {
-  "name": "AI Kit Workbench",
-  "short_name": "AI Kit",
+  "name": "AgentBox Workbench",
+  "short_name": "AgentBox",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f4f0e6",

@@ -1,338 +1,258 @@
-# AI Kit
+# AgentBox
 
 <p align="center">
-  <img src="logo.png" alt="AI Kit logo" width="150">
+  <img src="logo.png" alt="AgentBox logo" width="150">
 </p>
 
-AI Kit keeps exact backups of personal skills, commands, and prompts used by AI coding tools. Backups are separated by hostname so multiple machines can safely share one destination.
+AgentBox is a local-first catalog for the configuration that makes AI coding agents useful: skills, commands, prompts, supporting files, modes, and source lineage.
 
-Local folders, managed private Git repositories, or both can hold the durable backup. Tool directories are working copies.
+It gives Claude Code, Codex, and OpenCode one deliberate backup and restore workflow without flattening their original formats. Backups can live in a local folder, a Git repository you manage, or both.
+
+## Why AgentBox
+
+### Exact on the way in
+
+AgentBox preserves artifact bytes, supporting files, executable modes, relative source locations, and stable source IDs. Backup does not convert commands or rewrite skills.
+
+### Portable on the way out
+
+Restore exact originals to their recorded locations, or turn compatible commands and prompts into portable skill packages for another supported provider. Divergent artifacts stop before any target is changed.
+
+### Every browser write is reviewed
+
+The browser UI requires a dry-run preview before execution. Confirmation uses a short-lived, single-use token, repeats preflight under the operation lock, and rejects the operation if the filesystem or reviewed plan changed.
+
+### Storage without a hosted service
+
+- Local folder, including a cloud-synced folder or NAS mount
+- Managed Git repository using your existing SSH or credential helper
+- Dual local and Git copies with strict divergence checks
+
+AgentBox does not provide a hosted cloud, account system, analytics, or telemetry.
+
+AgentBox cannot verify remote visibility. If your catalog contains sensitive material, confirm that the Git repository is private before pushing.
+
+### Designed for multiple machines
+
+Catalog entries are separated by host namespace. AgentBox runs on macOS, Linux, and Windows and uses platform-appropriate configuration, data, and state directories.
+
+### Provider-first visibility
+
+First-run onboarding detects known providers and lets you enable resources explicitly. The workbench shows provider health, source availability, catalog artifacts, origins, storage, and live operation logs.
+
+## Supported Providers
+
+Typed backup and restore support:
+
+| Provider | Managed resources |
+| --- | --- |
+| Claude Code | Skills and commands |
+| Codex | Skills and prompts |
+| OpenCode | Skills and commands |
+
+Detection-only visibility is included for Cursor, Windsurf, Gemini CLI, GitHub Copilot, Continue, Goose, and Kiro. AgentBox shows these providers without applying unsafe generic file-copy behavior. Typed support will be added provider by provider.
+
+## Safety Model
+
+AgentBox treats configuration movement as a filesystem operation, not a convenience copy.
+
+- Multi-provider operations complete all preflight checks before writing.
+- Existing restore targets receive timestamped safety copies.
+- Symlinked sources, catalogs, and unsafe targets are rejected.
+- `--force` can explicitly permit replacement of symlinked restore targets from the CLI or reviewed UI operation.
+- Catalog traversal and overlapping destinations are rejected.
+- Missing sources cannot silently prune their only known backup.
+- Git pushes are never forced.
+- Rejected pushes roll back managed changes.
+- Ambiguous push outcomes preserve recoverable state for the next operation.
+- Dual storage stops when its copies disagree or Git is unavailable.
+- The web server binds only to loopback and serves all assets locally.
 
 ## Requirements
 
 - Python 3.14 or newer
-- Standard installation includes the local browser interface and its dependencies.
-- The core backup, restore, and status implementation remains dependency-free.
+- Git only when managed Git storage is enabled
 
 ## Installation
 
-Create an isolated environment for AI Kit:
-
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 ```
 
-Activate `.venv` in each new shell before using `ai-kit` or `ai-kit-ui`. The repository launcher continues to work without installation for CLI-only use.
+Windows PowerShell:
 
-## Quick Start
-
-Open the local interface. On first launch, AI Kit detects known providers, lets you choose resources and storage, and requires a reviewed preview before saving the configuration:
-
-```bash
-ai-kit ui
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e .
 ```
 
-After setup, preview and create the initial backup from the interface or CLI with `ai-kit backup all --dry-run` followed by `ai-kit backup all`.
-
-## User Interface
-
-If `.venv` does not exist, create it and install AI Kit once:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-```
-
-In each new shell, activate the virtual environment before opening the interface:
-
-```bash
-source .venv/bin/activate
-ai-kit ui
-```
-
-After activation, the repository launcher `./ai-kit ui` is equivalent. The installed `ai-kit-ui` command opens the same interface directly. Its default address is `http://127.0.0.1:8765`. Use a different local port with:
-
-```bash
-ai-kit ui --port 9000
-```
-
-The browser interface contains:
-
-- First-run provider detection and resource selection
-- Provider-first machine map and source availability
-- Searchable catalog artifacts and recorded origins
-- Backup and restore operation builders
-- Persistent local, managed Git, or dual-storage configuration
-- Portable and exact-original restore modes
-- Required dry-run previews
-- Explicit confirmation for writes, pruning, and forced symlink replacement
-- Live operation logs
-
-The server only accepts loopback binds. HTMX and all other application assets are bundled locally, so the interface does not require network access.
-
-### UI Safety
-
-Every write-capable UI operation follows this sequence:
-
-1. Run the core operation in dry-run mode.
-2. Display the complete structured operation log.
-3. Store a short-lived, single-use confirmation token and filesystem signature.
-4. On confirmation, repeat the preflight under the operation lock.
-5. Stop if any relevant source, target, catalog, configuration, or state content changed.
-6. Execute through the same atomic backup and restore functions used by the CLI.
-
-The local service uses a per-process CSRF token, trusted-host validation, serialized operations, and a cross-process lock on the selected configuration file.
-
-### Configuration Selection
-
-The repository launcher prefers the `ai-kit.json` beside the source checkout. Installed commands prefer `AI_KIT_CONFIG`, then `ai-kit.json` in the current directory, then the user configuration at `%APPDATA%\AI Kit\config.json` on Windows or `${XDG_CONFIG_HOME:-~/.config}/ai-kit/config.json` elsewhere. A missing user configuration opens first-run onboarding.
-
-Select another file explicitly with the existing global option:
-
-```bash
-./ai-kit --config /path/to/ai-kit.json ui
-```
-
-`AI_KIT_CONFIG` can also set the default configuration path for installed entry points.
-
-Restore this host's Codex artifacts to Codex as skills:
-
-```bash
-./ai-kit restore codex --dry-run
-./ai-kit restore codex
-```
-
-Restore only artifacts originally backed up from one tool:
-
-```bash
-./ai-kit restore claude --from opencode
-```
-
-Restore this host's artifacts from every tool to Claude Code:
-
-```bash
-./ai-kit restore claude --all-tools
-```
-
-Restore the matching tool's artifacts from every backed-up hostname:
-
-```bash
-./ai-kit restore opencode --all-hosts
-```
-
-Restore exact artifacts without converting commands or prompts:
-
-```bash
-./ai-kit restore opencode --as-backed-up
-```
-
-Check whether working copies differ from their exact backups:
-
-```bash
-./ai-kit status
-./ai-kit status codex
-```
-
-## Backup Behavior
-
-`backup <tool>` discovers skills and commands in every configured source. It stores their bytes, supporting files, relative source locations, and file modes under the detected hostname:
+Installed commands:
 
 ```text
-catalog/
-├── alice-macbook/
-│   ├── claude/
-│   │   ├── skills/
-│   │   ├── commands/
-│   │   └── manifest.json
-│   ├── codex/
-│   └── opencode/
-└── bob-workstation/
+agentbox
+agentbox-ui
 ```
 
-Backup is additive by default. Use `--prune` to remove catalog artifacts that no longer exist in the selected tool's source directories.
+The executable source launcher is `./agentbox.py`.
+
+## First Run
 
 ```bash
-./ai-kit backup codex
-./ai-kit backup all --prune
+agentbox ui
 ```
 
-The catalog preserves commands and prompts exactly. Conversion does not happen during backup.
+When no configuration is discovered, AgentBox opens onboarding and:
 
-The hostname comes from `socket.gethostname()`. Override it without changing shared configuration:
+1. Detects supported and recognized providers.
+2. Lets you choose managed resources.
+3. Lets you choose local, Git, or dual storage.
+4. Shows a dry-run of the configuration change.
+5. Saves only after explicit confirmation.
+
+The repository includes `agentbox.json`, so launching from its checkout uses that development configuration. Run the installed command from another directory to exercise first-run onboarding.
+
+The browser UI is available at `http://127.0.0.1:8765` by default.
 
 ```bash
-AI_KIT_HOST=alice-work ./ai-kit backup all
-./ai-kit --host alice-work backup all
+agentbox ui --port 9000
 ```
 
-## Providers
+## Core Workflow
 
-Provider definitions are bundled separately from user choices. Claude Code, Codex, and OpenCode currently have typed backup and restore support for skills and commands or prompts. Cursor, Windsurf, Gemini CLI, GitHub Copilot, Continue, Goose, and Kiro can be detected and shown in the provider map while typed resource support is developed.
+Preview and create a backup:
 
-The saved version 2 configuration records only provider enablement, resource enablement, storage, host, and optional path overrides. Disabling a resource does not delete its catalog entries or working files. Detection reads known paths and never creates provider directories.
+```bash
+agentbox backup all --dry-run
+agentbox backup all
+```
+
+Check drift:
+
+```bash
+agentbox status
+agentbox status codex
+```
+
+Restore matching portable resources:
+
+```bash
+agentbox restore claude --dry-run
+agentbox restore claude
+```
+
+Restore from another provider:
+
+```bash
+agentbox restore claude --from opencode
+```
+
+Restore exact originals to recorded locations:
+
+```bash
+agentbox restore opencode --as-backed-up
+```
+
+Restore across all catalog hosts:
+
+```bash
+agentbox restore opencode --all-hosts
+```
 
 ## Storage
 
-Local storage is the default when `storage` is omitted:
-
-- Windows: `%LOCALAPPDATA%\AI Kit\catalog`
-- Linux: `${XDG_DATA_HOME:-~/.local/share}/ai-kit/catalog`
-- macOS: `${XDG_DATA_HOME:-~/.local/share}/ai-kit/catalog`
-
-Set an explicit location when needed:
-
-```json
-{
-  "storage": {
-    "local": "~/Backups/ai-kit-catalog"
-  }
-}
-```
-
-Use a managed Git repository by configuring its URL. Git authentication comes from the user's existing SSH configuration, agent, or credential helper; AI Kit does not store credentials:
-
-```json
-{
-  "storage": {
-    "git": "git@github.com:example/private-ai-kit-catalog.git"
-  }
-}
-```
-
-Enable both destinations for two persistent copies:
-
-```json
-{
-  "storage": {
-    "local": "~/Backups/ai-kit-catalog",
-    "git": "git@github.com:example/private-ai-kit-catalog.git"
-  }
-}
-```
-
-Persist the same choices from the CLI, or use the Storage card in the browser interface:
+Configure a local catalog:
 
 ```bash
-./ai-kit storage --local ~/Backups/ai-kit-catalog
-./ai-kit storage --git git@github.com:example/private-ai-kit-catalog.git
-./ai-kit storage --local ~/Backups/ai-kit-catalog --git git@github.com:example/private-ai-kit-catalog.git
+agentbox storage --local ~/Backups/agentbox-catalog
 ```
 
-Add `--dry-run` to preview a CLI storage change without updating the configuration file. Supplying only `--local` disables Git; supplying only `--git` disables the configured local copy.
-
-The selected destinations remain active on every operation until their keys are removed from `storage`. Removing a destination does not delete its data.
-
-Git storage requires the `git` executable. AI Kit keeps a URL-keyed managed checkout under the platform data directory (`%LOCALAPPDATA%\AI Kit\repositories` on Windows or `${XDG_DATA_HOME:-~/.local/share}/ai-kit/repositories` elsewhere), fetches and fast-forwards it before operations, commits `catalog/` after a successful backup, and pushes without force. A remote race or non-fast-forward update stops the operation so it can be previewed again.
-
-In dual mode, both catalogs must agree before normal operations. If one destination is empty, the next confirmed backup initializes it from the populated destination. If both contain different data, or Git is unavailable, AI Kit stops instead of selecting or overwriting one copy. Dry runs and status may create or fetch the managed checkout, but they do not commit, push, populate the configured local destination, or change tool files.
-
-## Restore Modes
-
-### Portable Skills
-
-Portable restoration is the default:
+Configure managed Git storage:
 
 ```bash
-./ai-kit restore claude
+agentbox storage --git git@github.com:example/private-agentbox-catalog.git
 ```
 
-By default, it reads only the matching tool under the selected hostname. Therefore `restore claude` reads `catalog/<hostname>/claude` and does not import Codex, OpenCode, or another teammate's entries.
-
-Selection options:
-
-- `--from opencode` selects one different source tool.
-- `--all-tools` selects every source tool for the selected hostname.
-- `--host alice-work` selects one hostname instead of the detected hostname. This global option goes before `restore`.
-- `--all-hosts` selects every hostname in the catalog.
-- `--all-tools --all-hosts` explicitly restores the complete shared catalog to the target tool.
-
-- Existing skills are copied exactly, including scripts and references.
-- Commands and prompts become `<name>/SKILL.md` packages.
-- Conversion keeps `name` and `description`, removes tool-specific command frontmatter, and preserves the prompt body.
-- A short instruction explains that `$ARGUMENTS`, positional arguments, and named placeholders refer to the current user request.
-- Identical outputs with the same skill name are installed once.
-- Divergent outputs with the same name stop the restore before it writes anything. Select an origin with `--from <tool>`.
-
-### Exact Original
-
-Use `--as-backed-up` to prevent conversion:
+Keep both copies:
 
 ```bash
-./ai-kit restore codex --as-backed-up
+agentbox storage \
+  --local ~/Backups/agentbox-catalog \
+  --git git@github.com:example/private-agentbox-catalog.git
 ```
 
-This mode only reads the target tool's catalog for the selected hostname. It restores each artifact to the source location recorded during backup. The content and kind remain unchanged. `--all-hosts` is supported and stops if host backups disagree about content targeting the same location.
+Add `--dry-run` to preview a storage configuration change.
 
-`--from` and `--all-tools` cannot be combined with `--as-backed-up` because exact restoration already uses the target tool's recorded origins.
+Default local catalog locations:
 
-## Duplicate Prevention
+- Windows: `%LOCALAPPDATA%\AgentBox\catalog`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/agentbox/catalog`
+- macOS: `${XDG_DATA_HOME:-~/.local/share}/agentbox/catalog`
 
-Portable restores write a deployment receipt under the platform state directory: `%LOCALAPPDATA%\AI Kit\state\state.json` on Windows or `${XDG_STATE_HOME:-~/.local/state}/ai-kit/state.json` elsewhere. The receipt records the installed hash and its catalog origins.
+Managed Git checkouts live under the corresponding platform data directory in `AgentBox/repositories` or `agentbox/repositories`.
 
-On the next backup:
+## Configuration
 
-- An unchanged restored copy is skipped instead of being backed up as a duplicate.
-- A restored copy edited inside the tool directory is reported as a conflict before the catalog changes.
-- `--include-derived` explicitly backs up such an edited copy as an independent artifact.
-- If deployment state is unavailable, identical portable content is still deduplicated during backup and restore.
+Configuration lookup order:
 
-Backing up an edited derived copy can intentionally create two divergent entries with the same name. Resolve that later with `restore <target> --from <origin>` or reconcile the catalog contents.
+1. `AGENTBOX_CONFIG`
+2. The repository launcher’s adjacent `agentbox.json`
+3. `agentbox.json` in the current directory
+4. The platform user configuration
 
-## Safety
+Platform user configuration locations:
 
-- `--dry-run` previews backup and restore operations.
-- Divergent catalog entries stop portable restoration before target files are changed.
-- Existing target artifacts are copied under the platform state directory's `backups/<timestamp>/` folder before replacement.
-- Managed Git backups are committed and pushed only after catalog preflight succeeds; pushes are never forced.
-- Dual storage stops when its local and Git copies differ or the remote is unavailable.
-- New payloads are staged before they replace an existing catalog or tool artifact.
-- Symlinked target artifacts are not replaced unless `--force` is supplied.
-- Symlinked source artifacts and catalog paths are rejected instead of being followed outside configured roots.
-- A missing configured source keeps its catalog entries and recorded locations, including with `--prune`.
-- A changed artifact shared with an unavailable source is not allowed to overwrite that source's only known backup.
-- Catalog pruning only happens with `backup --prune`.
-- Exact-restore manifest paths are validated to prevent traversal outside configured roots.
+- Windows: `%APPDATA%\AgentBox\config.json`
+- Linux and macOS: `${XDG_CONFIG_HOME:-~/.config}/agentbox/config.json`
 
-## Default Locations
-
-| Tool | Skills | Commands or prompts |
-| --- | --- | --- |
-| Codex | `~/.agents/skills`, plus `~/.codex/skills` | `~/.codex/prompts` |
-| Claude Code | `~/.claude/skills` | `~/.claude/commands` |
-| OpenCode | `~/.config/opencode/skills` | `~/.config/opencode/commands` |
-
-Provider paths come from the bundled typed registry, while enablement and storage choices are saved in the user configuration. Every source has a stable ID so exact restoration can map a catalog entry back to the correct location without storing machine-specific absolute paths in Git.
-
-## Commands
-
-```text
-./ai-kit [--host hostname] backup <all|tool> [--dry-run] [--prune] [--include-derived]
-./ai-kit [--host hostname] restore <all|tool> [--dry-run] [--from tool | --all-tools] [--all-hosts] [--as-backed-up] [--force]
-./ai-kit [--host hostname] status [all|tool]
-./ai-kit storage [--local path] [--git repository-url] [--dry-run]
-./ai-kit [--host hostname] ui [--port port] [--no-open]
-```
-
-When using a different configuration file, put the global option before the command:
+Override the host namespace with `AGENTBOX_HOST` or the global `--host` option.
 
 ```bash
-./ai-kit --config /path/to/ai-kit.json backup all
+AGENTBOX_HOST=workstation agentbox backup all
+agentbox --host workstation backup all
 ```
+
+Global options must precede the action:
+
+```bash
+agentbox --config /path/to/agentbox.json backup all
+```
+
+## Architecture
+
+- `agentbox/core.py` owns backup, restore, status, provider compilation, storage transactions, path validation, atomic writes, and operation locks.
+- CLI and browser operations share the same typed `OperationRequest` and `OperationEvent` boundary.
+- Provider definitions are immutable package data in `agentbox/providers.json`.
+- The browser UI is loopback-only, server-rendered, HTMX-enhanced, and usable offline.
+- Core backup and restore operations remain independent of web dependencies.
+
+## AI Development Disclosure
+
+This software is developed with strong assistance from GPT 5.5, GPT 5.6, and Claude Fable, with humans leading the ideas, testing, and debugging. We say this openly because it shaped how the project was built.
+
+If you are not comfortable using AI-developed code, this software is not for you.
+
+AI assistance does not replace verification: AgentBox uses isolated filesystem tests, local bare Git repositories, browser security tests, package builds, dry-run invariants, and explicit human review of behavior and failures.
 
 ## Tests
 
-Run the CLI suite without installing optional dependencies. UI tests are skipped when FastAPI is unavailable:
+Run the dependency-free suite:
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-Install the test dependencies to run the complete suite:
+Run the complete suite:
 
 ```bash
 pip install -e '.[test]'
 python3 -m unittest discover -s tests -v
+```
+
+Verify packaging:
+
+```bash
+python3 -m pip wheel . --no-deps --wheel-dir /tmp/agentbox-wheel
 ```

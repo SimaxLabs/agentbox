@@ -9,14 +9,14 @@ from unittest.mock import patch
 try:
     import httpx
 
-    from ai_kit.web import create_app
+    from agentbox.web import create_app
 except ModuleNotFoundError:
     httpx = None
     create_app = None
 
 
 @unittest.skipIf(httpx is None, "web test dependencies are not installed")
-class AiKitWebTest(unittest.IsolatedAsyncioTestCase):
+class AgentBoxWebTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -34,7 +34,7 @@ class AiKitWebTest(unittest.IsolatedAsyncioTestCase):
         self.skills = self.root / "home/.config/opencode/skills"
         self.commands = self.root / "home/.config/opencode/commands"
         self.catalog = self.root / "catalog"
-        self.config = self.root / "ai-kit.json"
+        self.config = self.root / "agentbox.json"
         self.config.write_text(
             json.dumps(
                 {
@@ -83,7 +83,7 @@ class AiKitWebTest(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/")
 
         self.assertEqual(200, response.status_code)
-        self.assertIn("AI Kit Workbench", response.text)
+        self.assertIn("AgentBox Workbench", response.text)
         self.assertIn("UNBACKED opencode commands/audit.md", response.text)
         self.assertIn("default-src 'self'", response.headers["content-security-policy"])
         self.assertEqual("no-store", response.headers["cache-control"])

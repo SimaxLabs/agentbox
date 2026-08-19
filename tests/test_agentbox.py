@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from ai_kit.core import (
-    AiKitError,
+from agentbox.core import (
+    AgentBoxError,
     OperationRequest,
     default_local_catalog,
     load_config,
@@ -18,14 +18,14 @@ from ai_kit.core import (
     run_operation,
     user_state_root,
 )
-from ai_kit.paths import user_config_path
+from agentbox.paths import user_config_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CLI = ROOT / "ai-kit"
+CLI = ROOT / "agentbox.py"
 
 
-class AiKitTest(unittest.TestCase):
+class AgentBoxTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -43,7 +43,7 @@ class AiKitTest(unittest.TestCase):
         self.catalog = self.catalog_root / "test-host"
         self.state = self.root / "state/state.json"
         self.safety = self.root / "state/backups"
-        self.config = self.root / "ai-kit.json"
+        self.config = self.root / "agentbox.json"
         self.environment = os.environ.copy()
         self.environment["XDG_DATA_HOME"] = str(self.root / "data")
         self.environment["HOME"] = str(self.root / "home")
@@ -184,7 +184,7 @@ class AiKitTest(unittest.TestCase):
 
         restored_command.write_text(converted + "\nLocal change\n", encoding="utf-8")
         conflict = self.run_cli("backup", "claude", expected=2)
-        self.assertIn("was restored by ai-kit and then modified", conflict.stderr)
+        self.assertIn("was restored by agentbox and then modified", conflict.stderr)
         self.assertFalse((self.catalog / "claude/skills").exists())
 
     def test_as_backed_up_restores_original_content_and_location(self):
@@ -246,7 +246,7 @@ class AiKitTest(unittest.TestCase):
 
         result = self.run_cli("backup", "claude", expected=2)
 
-        self.assertIn("was restored by ai-kit and then modified", result.stderr)
+        self.assertIn("was restored by agentbox and then modified", result.stderr)
 
     def test_stale_receipt_preserves_old_deployed_content(self):
         command, _ = self.add_command("opencode_commands", body="Version one $ARGUMENTS")
@@ -508,7 +508,7 @@ class AiKitTest(unittest.TestCase):
 
         self.run_cli("backup", "opencode")
 
-        expected = self.root / "data/ai-kit/catalog/test-host/opencode/commands/audit.md"
+        expected = self.root / "data/agentbox/catalog/test-host/opencode/commands/audit.md"
         self.assertTrue(expected.is_file())
         self.assertFalse(self.catalog.exists())
 
@@ -517,17 +517,17 @@ class AiKitTest(unittest.TestCase):
         linux_data = self.root / "linux-data"
         linux_state = self.root / "linux-state"
 
-        with patch("ai_kit.core.sys.platform", "win32"), patch.dict(
+        with patch("agentbox.core.sys.platform", "win32"), patch.dict(
             os.environ, {"LOCALAPPDATA": str(windows_data)}, clear=False
         ):
-            self.assertEqual(windows_data / "AI Kit/catalog", default_local_catalog())
-            self.assertEqual(windows_data / "AI Kit/state", user_state_root())
-        with patch("ai_kit.paths.sys.platform", "win32"), patch.dict(
+            self.assertEqual(windows_data / "AgentBox/catalog", default_local_catalog())
+            self.assertEqual(windows_data / "AgentBox/state", user_state_root())
+        with patch("agentbox.paths.sys.platform", "win32"), patch.dict(
             os.environ, {"APPDATA": str(windows_data)}, clear=False
         ):
-            self.assertEqual(windows_data / "AI Kit/config.json", user_config_path())
+            self.assertEqual(windows_data / "AgentBox/config.json", user_config_path())
 
-        with patch("ai_kit.core.sys.platform", "linux"), patch.dict(
+        with patch("agentbox.core.sys.platform", "linux"), patch.dict(
             os.environ,
             {
                 "XDG_DATA_HOME": str(linux_data),
@@ -535,12 +535,12 @@ class AiKitTest(unittest.TestCase):
             },
             clear=False,
         ):
-            self.assertEqual(linux_data / "ai-kit/catalog", default_local_catalog())
-            self.assertEqual(linux_state / "ai-kit", user_state_root())
-        with patch("ai_kit.paths.sys.platform", "linux"), patch.dict(
+            self.assertEqual(linux_data / "agentbox/catalog", default_local_catalog())
+            self.assertEqual(linux_state / "agentbox", user_state_root())
+        with patch("agentbox.paths.sys.platform", "linux"), patch.dict(
             os.environ, {"XDG_CONFIG_HOME": str(linux_data)}, clear=False
         ):
-            self.assertEqual(linux_data / "ai-kit/config.json", user_config_path())
+            self.assertEqual(linux_data / "agentbox/config.json", user_config_path())
 
     def test_provider_configuration_creates_private_version_two_config(self):
         self.config.unlink()
@@ -632,7 +632,7 @@ class AiKitTest(unittest.TestCase):
         config["providers"]["opencode"]["enabled"] = False
         self.config.write_text(json.dumps(config), encoding="utf-8")
 
-        with self.assertRaisesRegex(AiKitError, "cannot have enabled resources"):
+        with self.assertRaisesRegex(AgentBoxError, "cannot have enabled resources"):
             load_config(self.config)
 
         config["providers"]["opencode"] = {
@@ -640,7 +640,7 @@ class AiKitTest(unittest.TestCase):
             "resources": {"skills": False, "commands": False},
         }
         self.config.write_text(json.dumps(config), encoding="utf-8")
-        with self.assertRaisesRegex(AiKitError, "must enable a resource"):
+        with self.assertRaisesRegex(AgentBoxError, "must enable a resource"):
             load_config(self.config)
 
     def test_provider_setup_rejects_symlinked_local_storage(self):
@@ -655,14 +655,14 @@ class AiKitTest(unittest.TestCase):
             storage_local=str(linked),
         )
 
-        with self.assertRaisesRegex(AiKitError, "Symlinked catalog roots"):
+        with self.assertRaisesRegex(AgentBoxError, "Symlinked catalog roots"):
             run_operation(self.config, request)
 
         self.assertFalse(self.config.exists())
 
         linked.unlink()
         linked.write_text("not a directory", encoding="utf-8")
-        with self.assertRaisesRegex(AiKitError, "Catalog root is not a directory"):
+        with self.assertRaisesRegex(AgentBoxError, "Catalog root is not a directory"):
             run_operation(self.config, request)
         self.assertFalse(self.config.exists())
 
@@ -695,7 +695,7 @@ class AiKitTest(unittest.TestCase):
         )
         self.assertIn("Audit $ARGUMENTS", backed_up.stdout)
         checkout_id = hashlib.sha256(url.encode("utf-8")).hexdigest()
-        self.assertTrue((self.root / "data/ai-kit/repositories" / checkout_id / ".git").is_dir())
+        self.assertTrue((self.root / "data/agentbox/repositories" / checkout_id / ".git").is_dir())
 
     def test_git_push_failure_rolls_back_managed_catalog(self):
         repository = self.add_bare_repository()
@@ -758,7 +758,7 @@ class AiKitTest(unittest.TestCase):
         self.add_command("opencode_commands")
         self.run_cli("backup", "opencode")
         checkout_id = hashlib.sha256(url.encode("utf-8")).hexdigest()
-        checkout = self.root / "data/ai-kit/repositories" / checkout_id
+        checkout = self.root / "data/agentbox/repositories" / checkout_id
         self.run_git(
             "-C",
             str(checkout),

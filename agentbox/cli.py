@@ -1,11 +1,11 @@
-"""Command-line interface for AI Kit."""
+"""Command-line interface for AgentBox."""
 
 import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from .core import AiKitError, OperationRequest, managed_provider_ids, run_operation
+from .core import AgentBoxError, OperationRequest, managed_provider_ids, run_operation
 from .paths import default_config_path
 
 
@@ -20,11 +20,11 @@ def parse_args(
     parser.add_argument(
         "--config",
         default=str(default_config),
-        help="configuration file (default: discovered ai-kit.json)",
+        help="configuration file (default: discovered agentbox.json)",
     )
     parser.add_argument(
         "--host",
-        help="catalog hostname namespace (default: AI_KIT_HOST or detected hostname)",
+        help="catalog hostname namespace (default: AGENTBOX_HOST or detected hostname)",
     )
     subparsers = parser.add_subparsers(dest="action", required=True)
     tool_choices = ["all", *tool_names]
@@ -36,7 +36,7 @@ def parse_args(
     backup.add_argument(
         "--include-derived",
         action="store_true",
-        help="back up locally modified artifacts previously restored by ai-kit",
+        help="back up locally modified artifacts previously restored by agentbox",
     )
 
     restore = subparsers.add_parser("restore", help="restore catalog artifacts")
@@ -128,13 +128,13 @@ def main(
 def entrypoint(repository_config: Path | None = None) -> None:
     try:
         raise SystemExit(main(repository_config=repository_config))
-    except AiKitError as exc:
+    except AgentBoxError as exc:
         print("error: {}".format(exc), file=sys.stderr)
         raise SystemExit(2)
     except ImportError as exc:
         print(
             "error: UI dependencies are unavailable: {}. "
-            "Install or reinstall ai-kit.".format(exc),
+            "Install or reinstall AgentBox.".format(exc),
             file=sys.stderr,
         )
         raise SystemExit(2)
