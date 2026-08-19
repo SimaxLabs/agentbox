@@ -8,24 +8,19 @@ version = "0.2.0"
 description = "Back up and restore skills and commands across AI coding tools."
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+  "fastapi>=0.115,<1",
+  "jinja2>=3.1,<4",
+  "python-multipart>=0.0.9,<1",
+  "uvicorn>=0.30,<1",
+]
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.14",
 ]
 
 [project.optional-dependencies]
-ui = [
-  "fastapi>=0.115,<1",
-  "jinja2>=3.1,<4",
-  "python-multipart>=0.0.9,<1",
-  "uvicorn>=0.30,<1",
-]
 test = [
-  "fastapi>=0.115,<1",
-  "jinja2>=3.1,<4",
-  "python-multipart>=0.0.9,<1",
-  "uvicorn>=0.30,<1",
   "httpx>=0.27,<1",
 ]
 

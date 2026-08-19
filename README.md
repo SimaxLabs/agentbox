@@ -11,20 +11,20 @@ The repository is the durable backup. Tool directories are working copies.
 ## Requirements
 
 - Python 3.14 or newer
-- The CLI has no third-party runtime dependencies.
-- The browser interface uses optional dependencies installed below.
+- Standard installation includes the local browser interface and its dependencies.
+- The core backup, restore, and status implementation remains dependency-free.
 
 ## Installation
 
-Create an isolated environment for the UI:
+Create an isolated environment for AI Kit:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e '.[ui]'
+pip install -e .
 ```
 
-The repository launcher continues to work without installation for CLI-only use.
+Activate `.venv` in each new shell before using `ai-kit` or `ai-kit-ui`. The repository launcher continues to work without installation for CLI-only use.
 
 ## Quick Start
 
@@ -38,17 +38,25 @@ git diff
 
 ## User Interface
 
-Run the interface in the default browser:
+If `.venv` does not exist, create it and install AI Kit once:
 
 ```bash
-pip install -e '.[ui]'
-./ai-kit ui
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
 ```
 
-The standalone installed command is `ai-kit-ui`. Its default address is `http://127.0.0.1:8765`. Use a different local port with:
+In each new shell, activate the virtual environment before opening the interface:
 
 ```bash
-./ai-kit ui --port 9000
+source .venv/bin/activate
+ai-kit ui
+```
+
+After activation, the repository launcher `./ai-kit ui` is equivalent. The installed `ai-kit-ui` command opens the same interface directly. Its default address is `http://127.0.0.1:8765`. Use a different local port with:
+
+```bash
+ai-kit ui --port 9000
 ```
 
 The browser interface contains:

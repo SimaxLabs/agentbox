@@ -37,7 +37,7 @@ def entrypoint() -> None:
     except ImportError as exc:
         print(
             "error: UI dependencies are unavailable: {}. "
-            "Install ai-kit with the ui extra.".format(exc),
+            "Install or reinstall ai-kit.".format(exc),
             file=sys.stderr,
         )
         raise SystemExit(2)

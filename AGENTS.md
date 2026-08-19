@@ -2,8 +2,8 @@
 
 ## Setup And Commands
 
-- The core CLI requires Python 3.14+ and has no dependencies: `./ai-kit ...`.
-- Install the optional browser UI explicitly: `pip install -e '.[ui]'`.
+- The project requires Python 3.14+. Core operations remain dependency-free, while standard installation includes the browser UI dependencies.
+- Install the editable project with `pip install -e .`.
 - Global CLI options must precede the action, for example `./ai-kit --config /tmp/ai-kit.json backup all`.
 - Run all dependency-free tests with `python3 -m unittest discover -s tests -v`; web tests are skipped when their extras are absent.
 - Run the complete suite after `pip install -e '.[test]'` with the same unittest command.

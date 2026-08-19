@@ -125,8 +125,8 @@ def entrypoint(repository_config: Path | None = None) -> None:
         raise SystemExit(2)
     except ImportError as exc:
         print(
-            "error: optional UI dependencies are unavailable: {}. "
-            "Install ai-kit with the ui extra.".format(exc),
+            "error: UI dependencies are unavailable: {}. "
+            "Install or reinstall ai-kit.".format(exc),
             file=sys.stderr,
         )
         raise SystemExit(2)
