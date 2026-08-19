@@ -29,6 +29,7 @@ from .core import (
     load_config,
     load_manifest,
     operation_guard,
+    provider_detection,
     redacted_git_url,
     run_operation,
     storage_lock_identities,
@@ -135,6 +136,24 @@ def update_tree_fingerprint(digest: object, path: Path) -> None:
     digest.update(b"\0")
 
 
+def update_path_identity(digest: object, path: Path) -> None:
+    digest.update(str(path).encode("utf-8"))
+    digest.update(b"\0")
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        digest.update(b"missing\0")
+        return
+    except OSError as exc:
+        raise AiKitError("Cannot inspect {}: {}".format(path, exc))
+    digest.update(
+        "{}:{}:{}".format(metadata.st_dev, metadata.st_ino, metadata.st_mode).encode("ascii")
+    )
+    if path.is_symlink():
+        digest.update(os.readlink(str(path)).encode("utf-8"))
+    digest.update(b"\0")
+
+
 def plan_signature(changes: int, events: list[dict], filesystem: str) -> str:
     reviewed = {
         "changes": changes,
@@ -171,6 +190,10 @@ class WebRuntime:
 
     @contextmanager
     def operation_guard(self, host: str | None = None):
+        if not self.config_path.exists():
+            with operation_guard(self.config_path):
+                yield
+            return
         config = load_config(self.config_path, host or self.host_override)
         locked_identities = storage_lock_identities(config)
         with operation_guard(self.config_path, *locked_identities):
@@ -189,6 +212,13 @@ class WebRuntime:
         return selected
 
     def filesystem_signature(self, request: OperationRequest) -> str:
+        if request.action == "providers":
+            digest = hashlib.sha256()
+            update_tree_fingerprint(digest, self.config_path)
+            update_tree_fingerprint(digest, PACKAGE_ROOT / "providers.json")
+            for parent in (self.config_path.parent, *self.config_path.parent.parents):
+                update_path_identity(digest, parent)
+            return digest.hexdigest()
         config = load_config(self.config_path, request.host)
         roots = {
             self.config_path,
@@ -372,6 +402,8 @@ class WebRuntime:
 
                     sources = []
                     for section_name in ("skills", "commands"):
+                        if not config["tools"][tool_name][section_name]["_enabled"]:
+                            continue
                         for source in config["tools"][tool_name][section_name]["_sources"]:
                             sources.append(
                                 {
@@ -384,7 +416,10 @@ class WebRuntime:
                             )
                     tools.append(
                         {
-                            "name": tool_name,
+                            "id": tool_name,
+                            "name": config["tools"][tool_name]["_name"],
+                            "description": config["tools"][tool_name]["_description"],
+                            "portable_target": config["tools"][tool_name]["skills"]["_enabled"],
                             "state": state,
                             "state_label": state_label,
                             "artifact_count": len(manifest["artifacts"]),
@@ -426,6 +461,26 @@ def form_flag(form: object, name: str) -> bool:
 
 def operation_from_form(runtime: WebRuntime, form: object) -> OperationRequest:
     action = str(form.get("action", ""))
+    if action == "providers":
+        getlist = getattr(form, "getlist", None)
+        resources = tuple(
+            str(value)
+            for value in (getlist("provider_resource") if getlist is not None else [])
+        )
+        return OperationRequest(
+            "providers",
+            provider_resources=resources,
+            storage_local=(
+                str(form.get("storage_local", "")).strip()
+                if form_flag(form, "local_enabled")
+                else None
+            ),
+            storage_git=(
+                str(form.get("storage_git", "")).strip()
+                if form_flag(form, "git_enabled")
+                else None
+            ),
+        )
     if action == "storage":
         config = load_config(runtime.config_path, runtime.host_override)
         return OperationRequest(
@@ -443,7 +498,7 @@ def operation_from_form(runtime: WebRuntime, form: object) -> OperationRequest:
             ),
         )
     if action not in ("backup", "restore"):
-        raise AiKitError("Choose a backup, restore, or storage operation")
+        raise AiKitError("Choose a backup, restore, storage, or provider operation")
     tool = str(form.get("tool", "all"))
     selected_host = runtime.validate_host(str(form.get("host", "")))
     if action == "backup":
@@ -478,6 +533,8 @@ def operation_from_form(runtime: WebRuntime, form: object) -> OperationRequest:
 
 
 def operation_label(request: OperationRequest) -> str:
+    if request.action == "providers":
+        return "Configure this machine"
     if request.action == "storage":
         return "Update storage configuration"
     target = "every configured tool" if request.tool == "all" else request.tool
@@ -489,7 +546,6 @@ def operation_label(request: OperationRequest) -> str:
 
 def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
     runtime = WebRuntime(config_path, host_override)
-    initial_config = load_config(runtime.config_path, host_override)
     templates = Jinja2Templates(directory=str(PACKAGE_ROOT / "templates"))
     app = FastAPI(title="AI Kit", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.runtime = runtime
@@ -541,10 +597,34 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
             "tool_names": sorted(config["tools"]),
             "hosts": hosts,
             "selected_host": selected_host,
+            "provider_options": provider_detection(config),
+        }
+
+    def onboarding_context(request: Request) -> dict:
+        if runtime.config_path.exists():
+            config = load_config(runtime.config_path, runtime.host_override)
+            providers = provider_detection(config)
+            local_root = config["_storage_local"]
+            git_url = config["_storage_git_url"]
+        else:
+            providers = provider_detection()
+            local_root = default_local_catalog()
+            git_url = None
+        return {
+            "request": request,
+            "csrf_token": runtime.csrf_token,
+            "config_path": str(runtime.config_path),
+            "providers": providers,
+            "default_local_storage_path": str(default_local_catalog()),
+            "local_storage_path": str(local_root) if local_root is not None else "",
+            "local_storage_enabled": local_root is not None,
+            "git_storage_url": git_url or "",
+            "git_storage_enabled": git_url is not None,
         }
 
     async def dashboard_context(request: Request, host: str | None) -> dict:
-        selected_host = runtime.validate_host(host or initial_config["_host"])
+        config = load_config(runtime.config_path, runtime.host_override)
+        selected_host = runtime.validate_host(host or config["_host"])
         dashboard = await run_in_threadpool(runtime.dashboard, selected_host)
         context = base_context(request, selected_host)
         context.update(dashboard)
@@ -552,8 +632,22 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request, host: str | None = None):
+        if not runtime.config_path.exists():
+            return templates.TemplateResponse(
+                request=request,
+                name="onboarding.html",
+                context=onboarding_context(request),
+            )
         context = await dashboard_context(request, host)
         return templates.TemplateResponse(request=request, name="index.html", context=context)
+
+    @app.get("/onboarding", response_class=HTMLResponse)
+    async def onboarding(request: Request):
+        return templates.TemplateResponse(
+            request=request,
+            name="onboarding.html",
+            context=onboarding_context(request),
+        )
 
     @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard(request: Request, host: str | None = None):
@@ -579,7 +673,7 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
                     "events": events,
                     "dangerous": operation.prune
                     or operation.force
-                    or operation.action in ("restore", "storage"),
+                    or operation.action in ("restore", "storage", "providers"),
                 }
             )
             return templates.TemplateResponse(
@@ -617,7 +711,7 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
                 "csrf_token": runtime.csrf_token,
                 "operation_label": operation_label(preview.request),
                 "selected_host": preview.request.host,
-                "reload_page": preview.request.action == "storage",
+                "reload_page": preview.request.action in ("storage", "providers"),
             },
         )
 

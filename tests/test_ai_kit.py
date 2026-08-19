@@ -9,7 +9,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from ai_kit.core import default_local_catalog, user_state_root
+from ai_kit.core import (
+    AiKitError,
+    OperationRequest,
+    default_local_catalog,
+    load_config,
+    provider_detection,
+    run_operation,
+    user_state_root,
+)
+from ai_kit.paths import user_config_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,13 +31,13 @@ class AiKitTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.paths = {
-            "claude_skills": self.root / "home/claude/skills",
-            "claude_commands": self.root / "home/claude/commands",
-            "codex_current": self.root / "home/agents/skills",
-            "codex_secondary": self.root / "home/codex/skills",
-            "codex_prompts": self.root / "home/codex/prompts",
-            "opencode_skills": self.root / "home/opencode/skills",
-            "opencode_commands": self.root / "home/opencode/commands",
+            "claude_skills": self.root / "home/.claude/skills",
+            "claude_commands": self.root / "home/.claude/commands",
+            "codex_current": self.root / "home/.agents/skills",
+            "codex_secondary": self.root / "home/.codex/skills",
+            "codex_prompts": self.root / "home/.codex/prompts",
+            "opencode_skills": self.root / "home/.config/opencode/skills",
+            "opencode_commands": self.root / "home/.config/opencode/commands",
         }
         self.catalog_root = self.root / "catalog"
         self.catalog = self.catalog_root / "test-host"
@@ -41,46 +50,22 @@ class AiKitTest(unittest.TestCase):
         self.config.write_text(
             json.dumps(
                 {
-                    "version": 1,
+                    "version": 2,
                     "host": "test-host",
                     "storage": {"local": str(self.catalog_root)},
                     "state_file": str(self.state),
                     "safety_backups": str(self.safety),
-                    "tools": {
-                        "claude": self.tool_config("claude_skills", "claude_commands"),
-                        "codex": {
-                            "skills": {
-                                "sources": [
-                                    {"id": "current", "path": str(self.paths["codex_current"])},
-                                    {"id": "secondary", "path": str(self.paths["codex_secondary"])},
-                                ],
-                                "target": str(self.paths["codex_current"]),
-                            },
-                            "commands": {
-                                "sources": [
-                                    {"id": "prompts", "path": str(self.paths["codex_prompts"])}
-                                ],
-                                "target": str(self.paths["codex_prompts"]),
-                            },
-                        },
-                        "opencode": self.tool_config("opencode_skills", "opencode_commands"),
+                    "providers": {
+                        provider: {
+                            "enabled": True,
+                            "resources": {"skills": True, "commands": True},
+                        }
+                        for provider in ("claude", "codex", "opencode")
                     },
                 }
             ),
             encoding="utf-8",
         )
-
-    def tool_config(self, skills_key, commands_key):
-        return {
-            "skills": {
-                "sources": [{"id": "skills", "path": str(self.paths[skills_key])}],
-                "target": str(self.paths[skills_key]),
-            },
-            "commands": {
-                "sources": [{"id": "commands", "path": str(self.paths[commands_key])}],
-                "target": str(self.paths[commands_key]),
-            },
-        }
 
     def run_cli(self, *arguments, expected=0):
         result = subprocess.run(
@@ -173,7 +158,7 @@ class AiKitTest(unittest.TestCase):
             (self.catalog / "opencode/commands/audit.md").read_text(encoding="utf-8"),
         )
         manifest = json.loads((self.catalog / "codex/manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual("secondary", manifest["artifacts"][0]["sources"][0]["id"])
+        self.assertEqual("codex-skills", manifest["artifacts"][0]["sources"][0]["id"])
 
     def test_converted_restore_does_not_duplicate_on_next_backup(self):
         self.add_skill("codex_secondary", "jira-ticket")
@@ -249,7 +234,7 @@ class AiKitTest(unittest.TestCase):
         self.assertIn("KEEP unavailable source", result.stdout)
         self.assertTrue((self.catalog / "codex/skills/jira-ticket/SKILL.md").is_file())
         manifest = json.loads((self.catalog / "codex/manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual("secondary", manifest["artifacts"][0]["sources"][0]["id"])
+        self.assertEqual("codex-skills", manifest["artifacts"][0]["sources"][0]["id"])
 
     def test_modified_derived_artifact_conflicts_even_if_origin_is_removed(self):
         self.add_command("opencode_commands")
@@ -358,7 +343,7 @@ class AiKitTest(unittest.TestCase):
 
         result = self.run_cli("backup", "codex", expected=2)
 
-        self.assertIn("recorded source(s) secondary are unavailable", result.stderr)
+        self.assertIn("recorded source(s) codex-skills are unavailable", result.stderr)
         backed = (self.catalog / "codex/skills/jira-ticket/SKILL.md").read_text(encoding="utf-8")
         self.assertIn("Original", backed)
 
@@ -498,19 +483,6 @@ class AiKitTest(unittest.TestCase):
         )
         self.assertTrue((self.catalog / "opencode/skills/shared-skill/SKILL.md").is_file())
 
-    def test_overlapping_portable_targets_are_rejected_before_writing(self):
-        self.add_skill("claude_skills", "shared", body="Claude")
-        self.add_skill("codex_secondary", "shared", body="Codex")
-        self.run_cli("backup", "all")
-        config = json.loads(self.config.read_text(encoding="utf-8"))
-        config["tools"]["claude"]["skills"]["target"] = str(self.paths["codex_current"])
-        self.config.write_text(json.dumps(config), encoding="utf-8")
-
-        result = self.run_cli("restore", "all", expected=2)
-
-        self.assertIn("both map to", result.stderr)
-        self.assertFalse((self.paths["codex_current"] / "shared").exists())
-
     def test_dry_run_does_not_write(self):
         self.add_command("opencode_commands")
 
@@ -550,6 +522,10 @@ class AiKitTest(unittest.TestCase):
         ):
             self.assertEqual(windows_data / "AI Kit/catalog", default_local_catalog())
             self.assertEqual(windows_data / "AI Kit/state", user_state_root())
+        with patch("ai_kit.paths.sys.platform", "win32"), patch.dict(
+            os.environ, {"APPDATA": str(windows_data)}, clear=False
+        ):
+            self.assertEqual(windows_data / "AI Kit/config.json", user_config_path())
 
         with patch("ai_kit.core.sys.platform", "linux"), patch.dict(
             os.environ,
@@ -561,6 +537,134 @@ class AiKitTest(unittest.TestCase):
         ):
             self.assertEqual(linux_data / "ai-kit/catalog", default_local_catalog())
             self.assertEqual(linux_state / "ai-kit", user_state_root())
+        with patch("ai_kit.paths.sys.platform", "linux"), patch.dict(
+            os.environ, {"XDG_CONFIG_HOME": str(linux_data)}, clear=False
+        ):
+            self.assertEqual(linux_data / "ai-kit/config.json", user_config_path())
+
+    def test_provider_configuration_creates_private_version_two_config(self):
+        self.config.unlink()
+        events = []
+        request = OperationRequest(
+            "providers",
+            provider_resources=("opencode.commands",),
+            storage_local=str(self.catalog_root),
+        )
+
+        run_operation(self.config, request, events.append)
+
+        saved = json.loads(self.config.read_text(encoding="utf-8"))
+        self.assertEqual(2, saved["version"])
+        self.assertFalse(saved["providers"]["claude"]["enabled"])
+        self.assertTrue(saved["providers"]["opencode"]["resources"]["commands"])
+        self.assertFalse(saved["providers"]["opencode"]["resources"]["skills"])
+        self.assertEqual(0o600, self.config.stat().st_mode & 0o777)
+        compiled = load_config(self.config)
+        self.assertFalse(compiled["tools"]["opencode"]["skills"]["_enabled"])
+        self.assertTrue(compiled["tools"]["opencode"]["commands"]["_enabled"])
+
+    def test_disabled_resource_is_not_backed_up_or_pruned(self):
+        self.add_skill("opencode_skills", "kept-skill")
+        self.add_command("opencode_commands")
+        self.run_cli("backup", "opencode")
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["providers"]["opencode"]["resources"]["skills"] = False
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        shutil.rmtree(self.paths["opencode_skills"])
+        command = self.paths["opencode_commands"] / "audit.md"
+        command.write_text(command.read_text(encoding="utf-8") + "Changed\n", encoding="utf-8")
+
+        self.run_cli("backup", "opencode", "--prune")
+
+        self.assertTrue(
+            (self.catalog / "opencode/skills/kept-skill/SKILL.md").is_file()
+        )
+        self.assertIn(
+            "Changed",
+            (self.catalog / "opencode/commands/audit.md").read_text(encoding="utf-8"),
+        )
+
+    def test_provider_detection_does_not_create_paths(self):
+        before = set(self.root.rglob("*"))
+
+        with patch.dict(
+            os.environ,
+            {
+                "HOME": str(self.root / "empty-home"),
+                "XDG_CONFIG_HOME": str(self.root / "empty-config"),
+            },
+        ):
+            detected = provider_detection()
+
+        after = set(self.root.rglob("*"))
+        opencode = next(item for item in detected if item["id"] == "opencode")
+        self.assertFalse(opencode["detected"])
+        self.assertEqual(before, after)
+
+    def test_opencode_resources_follow_xdg_config_home(self):
+        custom = self.root / "xdg-config"
+
+        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(custom)}):
+            config = load_config(self.config)
+
+        self.assertEqual(
+            custom / "opencode/skills",
+            config["tools"]["opencode"]["skills"]["_target"],
+        )
+        self.assertEqual(
+            custom / "opencode/commands",
+            config["tools"]["opencode"]["commands"]["_sources"][0]["path"],
+        )
+
+        for invalid in ("", "relative-config"):
+            with patch.dict(
+                os.environ,
+                {"HOME": str(self.root / "fallback-home"), "XDG_CONFIG_HOME": invalid},
+            ):
+                fallback = load_config(self.config)
+            self.assertEqual(
+                self.root / "fallback-home/.config/opencode/skills",
+                fallback["tools"]["opencode"]["skills"]["_target"],
+            )
+
+    def test_disabled_provider_cannot_keep_enabled_resources(self):
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["providers"]["opencode"]["enabled"] = False
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+
+        with self.assertRaisesRegex(AiKitError, "cannot have enabled resources"):
+            load_config(self.config)
+
+        config["providers"]["opencode"] = {
+            "enabled": True,
+            "resources": {"skills": False, "commands": False},
+        }
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        with self.assertRaisesRegex(AiKitError, "must enable a resource"):
+            load_config(self.config)
+
+    def test_provider_setup_rejects_symlinked_local_storage(self):
+        external = self.root / "external-catalog"
+        external.mkdir()
+        linked = self.root / "linked-catalog"
+        linked.symlink_to(external)
+        self.config.unlink()
+        request = OperationRequest(
+            "providers",
+            provider_resources=("opencode.skills",),
+            storage_local=str(linked),
+        )
+
+        with self.assertRaisesRegex(AiKitError, "Symlinked catalog roots"):
+            run_operation(self.config, request)
+
+        self.assertFalse(self.config.exists())
+
+        linked.unlink()
+        linked.write_text("not a directory", encoding="utf-8")
+        with self.assertRaisesRegex(AiKitError, "Catalog root is not a directory"):
+            run_operation(self.config, request)
+        self.assertFalse(self.config.exists())
 
     def test_git_storage_manages_clone_commit_and_push(self):
         repository = self.add_bare_repository()

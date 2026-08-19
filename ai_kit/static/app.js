@@ -17,11 +17,16 @@
       form.dataset.ready = "true";
       var mode = form.querySelector("[data-restore-mode]");
       var source = form.querySelector("[data-source-mode]");
+      var target = form.querySelector('select[name="tool"]');
       function updateMode() {
         var exact = mode.value === "exact";
         if (exact) source.value = "matching";
         source.disabled = exact;
         source.title = exact ? "Exact restoration uses recorded locations from the matching catalog." : "";
+        target.querySelectorAll("option[data-portable]").forEach(function (option) {
+          option.disabled = !exact && option.dataset.portable !== "true";
+        });
+        if (target.selectedOptions[0] && target.selectedOptions[0].disabled) target.value = "all";
       }
       mode.addEventListener("change", updateMode);
       updateMode();

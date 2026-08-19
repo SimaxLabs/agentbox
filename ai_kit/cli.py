@@ -5,7 +5,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from .core import AiKitError, OperationRequest, load_config, run_operation
+from .core import AiKitError, OperationRequest, managed_provider_ids, run_operation
 from .paths import default_config_path
 
 
@@ -93,8 +93,7 @@ def main(
     bootstrap.add_argument("--host")
     bootstrap_args, _ = bootstrap.parse_known_args(arguments)
     config_path = Path(bootstrap_args.config).expanduser().resolve()
-    config = load_config(config_path, bootstrap_args.host)
-    args = parse_args(sorted(config["tools"]), default_config, arguments)
+    args = parse_args(managed_provider_ids(), default_config, arguments)
 
     if args.action == "ui":
         from .web import run_browser

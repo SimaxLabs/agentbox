@@ -28,12 +28,13 @@ Activate `.venv` in each new shell before using `ai-kit` or `ai-kit-ui`. The rep
 
 ## Quick Start
 
-Preview and create an initial backup:
+Open the local interface. On first launch, AI Kit detects known providers, lets you choose resources and storage, and requires a reviewed preview before saving the configuration:
 
 ```bash
-./ai-kit backup all --dry-run
-./ai-kit backup all
+ai-kit ui
 ```
+
+After setup, preview and create the initial backup from the interface or CLI with `ai-kit backup all --dry-run` followed by `ai-kit backup all`.
 
 ## User Interface
 
@@ -60,7 +61,8 @@ ai-kit ui --port 9000
 
 The browser interface contains:
 
-- Per-tool backup status and source availability
+- First-run provider detection and resource selection
+- Provider-first machine map and source availability
 - Searchable catalog artifacts and recorded origins
 - Backup and restore operation builders
 - Persistent local, managed Git, or dual-storage configuration
@@ -86,7 +88,7 @@ The local service uses a per-process CSRF token, trusted-host validation, serial
 
 ### Configuration Selection
 
-The repository launcher prefers the `ai-kit.json` beside the source checkout. Installed commands use `ai-kit.json` from the current directory when available, then fall back to the bundled configuration. Both shipped configurations omit storage paths so AI Kit selects the platform data directory at runtime.
+The repository launcher prefers the `ai-kit.json` beside the source checkout. Installed commands prefer `AI_KIT_CONFIG`, then `ai-kit.json` in the current directory, then the user configuration at `%APPDATA%\AI Kit\config.json` on Windows or `${XDG_CONFIG_HOME:-~/.config}/ai-kit/config.json` elsewhere. A missing user configuration opens first-run onboarding.
 
 Select another file explicitly with the existing global option:
 
@@ -165,6 +167,12 @@ The hostname comes from `socket.gethostname()`. Override it without changing sha
 AI_KIT_HOST=alice-work ./ai-kit backup all
 ./ai-kit --host alice-work backup all
 ```
+
+## Providers
+
+Provider definitions are bundled separately from user choices. Claude Code, Codex, and OpenCode currently have typed backup and restore support for skills and commands or prompts. Cursor, Windsurf, Gemini CLI, GitHub Copilot, Continue, Goose, and Kiro can be detected and shown in the provider map while typed resource support is developed.
+
+The saved version 2 configuration records only provider enablement, resource enablement, storage, host, and optional path overrides. Disabling a resource does not delete its catalog entries or working files. Detection reads known paths and never creates provider directories.
 
 ## Storage
 
@@ -296,7 +304,7 @@ Backing up an edited derived copy can intentionally create two divergent entries
 | Claude Code | `~/.claude/skills` | `~/.claude/commands` |
 | OpenCode | `~/.config/opencode/skills` | `~/.config/opencode/commands` |
 
-The paths and additional tools are configured in `ai-kit.json`. Every source has a stable ID so exact restoration can map a catalog entry back to the correct location without storing machine-specific absolute paths in Git.
+Provider paths come from the bundled typed registry, while enablement and storage choices are saved in the user configuration. Every source has a stable ID so exact restoration can map a catalog entry back to the correct location without storing machine-specific absolute paths in Git.
 
 ## Commands
 

@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "claude",
+      "name": "Claude Code",
+      "description": "Anthropic's coding agent",
+      "mode": "managed",
+      "detect": ["~/.claude"],
+      "resources": {
+        "skills": {
+          "name": "Skills",
+          "sources": [{"id": "claude-skills", "path": "~/.claude/skills"}],
+          "target": "~/.claude/skills"
+        },
+        "commands": {
+          "name": "Commands",
+          "sources": [{"id": "claude-commands", "path": "~/.claude/commands"}],
+          "target": "~/.claude/commands"
+        }
+      }
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "description": "OpenAI's coding agent",
+      "mode": "managed",
+      "detect": ["~/.codex"],
+      "resources": {
+        "skills": {
+          "name": "Skills",
+          "sources": [
+            {"id": "agent-skills", "path": "~/.agents/skills"},
+            {"id": "codex-skills", "path": "~/.codex/skills"}
+          ],
+          "target": "~/.agents/skills"
+        },
+        "commands": {
+          "name": "Prompts",
+          "sources": [{"id": "codex-prompts", "path": "~/.codex/prompts"}],
+          "target": "~/.codex/prompts"
+        }
+      }
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode",
+      "description": "OpenCode coding agent",
+      "mode": "managed",
+      "detect": ["$XDG_CONFIG_HOME/opencode", "~/.config/opencode"],
+      "resources": {
+        "skills": {
+          "name": "Skills",
+          "sources": [{"id": "opencode-skills", "path": "$XDG_CONFIG_HOME/opencode/skills"}],
+          "target": "$XDG_CONFIG_HOME/opencode/skills"
+        },
+        "commands": {
+          "name": "Commands",
+          "sources": [{"id": "opencode-commands", "path": "$XDG_CONFIG_HOME/opencode/commands"}],
+          "target": "$XDG_CONFIG_HOME/opencode/commands"
+        }
+      }
+    },
+    {
+      "id": "cursor",
+      "name": "Cursor",
+      "description": "AI-first code editor",
+      "mode": "detection-only",
+      "detect": ["~/.cursor"],
+      "resource_labels": ["Skills", "Commands", "Rules"]
+    },
+    {
+      "id": "windsurf",
+      "name": "Windsurf",
+      "description": "AI coding environment",
+      "mode": "detection-only",
+      "detect": ["~/.codeium/windsurf"],
+      "resource_labels": ["Skills", "Workflows"]
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini CLI",
+      "description": "Google's terminal coding agent",
+      "mode": "detection-only",
+      "detect": ["~/.gemini"],
+      "resource_labels": ["Skills", "Commands", "Instructions"]
+    },
+    {
+      "id": "github-copilot",
+      "name": "GitHub Copilot",
+      "description": "GitHub's AI coding assistant",
+      "mode": "detection-only",
+      "detect": ["~/.copilot"],
+      "resource_labels": ["Skills", "Prompts", "Instructions"]
+    },
+    {
+      "id": "continue",
+      "name": "Continue",
+      "description": "Open-source coding assistant",
+      "mode": "detection-only",
+      "detect": ["~/.continue"],
+      "resource_labels": ["Prompts", "Rules", "Assistants"]
+    },
+    {
+      "id": "goose",
+      "name": "Goose",
+      "description": "Block's coding agent",
+      "mode": "detection-only",
+      "detect": ["$XDG_CONFIG_HOME/goose", "~/.config/goose"],
+      "resource_labels": ["Skills", "Recipes"]
+    },
+    {
+      "id": "kiro",
+      "name": "Kiro",
+      "description": "AI development environment",
+      "mode": "detection-only",
+      "detect": ["~/.kiro"],
+      "resource_labels": ["Skills", "Steering", "Hooks"]
+    }
+  ]
+}

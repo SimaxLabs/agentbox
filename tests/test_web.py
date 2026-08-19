@@ -1,8 +1,10 @@
 import json
+import os
 import re
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 try:
     import httpx
@@ -19,28 +21,32 @@ class AiKitWebTest(unittest.IsolatedAsyncioTestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.skills = self.root / "home/opencode/skills"
-        self.commands = self.root / "home/opencode/commands"
+        environment = patch.dict(
+            os.environ,
+            {
+                "HOME": str(self.root / "home"),
+                "XDG_DATA_HOME": str(self.root / "data"),
+                "XDG_STATE_HOME": str(self.root / "state-root"),
+            },
+        )
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.skills = self.root / "home/.config/opencode/skills"
+        self.commands = self.root / "home/.config/opencode/commands"
         self.catalog = self.root / "catalog"
         self.config = self.root / "ai-kit.json"
         self.config.write_text(
             json.dumps(
                 {
-                    "version": 1,
+                    "version": 2,
                     "host": "test-host",
                     "storage": {"local": str(self.catalog)},
                     "state_file": str(self.root / "state/state.json"),
                     "safety_backups": str(self.root / "state/backups"),
-                    "tools": {
+                    "providers": {
                         "opencode": {
-                            "skills": {
-                                "sources": [{"id": "skills", "path": str(self.skills)}],
-                                "target": str(self.skills),
-                            },
-                            "commands": {
-                                "sources": [{"id": "commands", "path": str(self.commands)}],
-                                "target": str(self.commands),
-                            },
+                            "enabled": True,
+                            "resources": {"skills": True, "commands": True},
                         }
                     },
                 }
@@ -188,6 +194,93 @@ class AiKitWebTest(unittest.IsolatedAsyncioTestCase):
         saved = json.loads(self.config.read_text(encoding="utf-8"))
         self.assertEqual({"local": str(selected)}, saved["storage"])
         self.assertNotIn("catalog", saved)
+
+    async def test_first_run_onboarding_is_previewed_and_persisted(self):
+        self.config.unlink()
+        app = create_app(self.config)
+        client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        )
+        self.addAsyncCleanup(client.aclose)
+        csrf = app.state.runtime.csrf_token
+
+        page = await client.get("/")
+
+        self.assertEqual(200, page.status_code)
+        self.assertIn("Map your AI", page.text)
+        self.assertIn("Managed providers", page.text)
+        self.assertFalse(self.config.exists())
+
+        preview = await client.post(
+            "/operations/preview",
+            data={
+                "csrf_token": csrf,
+                "action": "providers",
+                "provider_resource": ["opencode.skills", "opencode.commands"],
+                "local_enabled": "on",
+                "storage_local": str(self.catalog),
+            },
+        )
+
+        self.assertEqual(200, preview.status_code)
+        self.assertIn("PROVIDER OpenCode", preview.text)
+        self.assertFalse(self.config.exists())
+        token = re.search(r'name="preview_token" value="([^"]+)"', preview.text).group(1)
+        execute = await client.post(
+            "/operations/execute",
+            data={"csrf_token": csrf, "preview_token": token},
+        )
+        self.assertIn('data-reload-page="true"', execute.text)
+        job_id = re.search(r'data-job-id="([^"]+)"', execute.text).group(1)
+        events = await client.get(
+            "/operations/{}/events".format(job_id), params={"token": csrf}
+        )
+
+        self.assertIn('"kind": "complete"', events.text)
+        saved = json.loads(self.config.read_text(encoding="utf-8"))
+        self.assertEqual(2, saved["version"])
+        self.assertTrue(saved["providers"]["opencode"]["resources"]["skills"])
+        self.assertFalse(saved["providers"]["claude"]["enabled"])
+        self.assertEqual(0o600, self.config.stat().st_mode & 0o777)
+
+        dashboard = await client.get("/")
+        self.assertIn("Provider overview", dashboard.text)
+
+    async def test_onboarding_stops_if_config_parent_is_redirected(self):
+        config = self.root / "missing-settings/config.json"
+        app = create_app(config)
+        client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        )
+        self.addAsyncCleanup(client.aclose)
+        csrf = app.state.runtime.csrf_token
+        preview = await client.post(
+            "/operations/preview",
+            data={
+                "csrf_token": csrf,
+                "action": "providers",
+                "provider_resource": ["opencode.skills"],
+                "local_enabled": "on",
+                "storage_local": str(self.catalog),
+            },
+        )
+        token = re.search(r'name="preview_token" value="([^"]+)"', preview.text).group(1)
+        redirected = self.root / "redirected-settings"
+        redirected.mkdir()
+        config.parent.symlink_to(redirected, target_is_directory=True)
+
+        execute = await client.post(
+            "/operations/execute",
+            data={"csrf_token": csrf, "preview_token": token},
+        )
+        job_id = re.search(r'data-job-id="([^"]+)"', execute.text).group(1)
+        events = await client.get(
+            "/operations/{}/events".format(job_id), params={"token": csrf}
+        )
+
+        self.assertIn('"kind": "error"', events.text)
+        self.assertIn("filesystem changed", events.text)
+        self.assertFalse((redirected / "config.json").exists())
 
 
 if __name__ == "__main__":

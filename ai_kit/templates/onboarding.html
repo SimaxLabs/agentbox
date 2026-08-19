@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#162321">
+  <meta name="htmx-config" content='{"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"409","swap":true},{"code":"422","swap":true},{"code":"[45]..","swap":false}]}' type="application/json">
+  <title>Set up AI Kit</title>
+  <link rel="icon" href="/static/logo.png" type="image/png">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/vendor/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body class="onboarding-page">
+  <header class="masthead">
+    <a class="brand" href="/" aria-label="AI Kit setup">
+      <span class="brand-mark"><img src="/static/logo.png" alt=""></span>
+      <span><strong>AI Kit</strong><small>machine setup</small></span>
+    </a>
+    <div class="environment">
+      <div class="environment-item config-item">
+        <span class="eyebrow">Configuration</span>
+        <span class="path" title="{{ config_path }}">{{ config_path }}</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="onboarding-main">
+    <aside class="onboarding-rail" aria-label="Setup progress">
+      <p class="kicker">First run</p>
+      <ol>
+        <li class="active"><span>01</span>Map this machine</li>
+        <li><span>02</span>Choose resources</li>
+        <li><span>03</span>Choose storage</li>
+        <li><span>04</span>Review safely</li>
+      </ol>
+      <div class="local-note">
+        <strong>Local control plane</strong>
+        <p>Detection reads known configuration paths only. Nothing is written until you review and confirm.</p>
+      </div>
+    </aside>
+
+    <section class="onboarding-content">
+      <div class="onboarding-intro">
+        <p class="kicker">Configure once, move safely</p>
+        <h1>Map your AI<br>tooling.</h1>
+        <p>Choose what belongs in your unified catalog. AI Kit keeps each provider's original files intact and previews every write.</p>
+      </div>
+
+      <form class="setup-form" method="post" action="/operations/preview" hx-post="/operations/preview" hx-target="#operation-panel" hx-swap="innerHTML" data-async-form>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="action" value="providers">
+
+        <section class="setup-section" aria-labelledby="managed-heading">
+          <div class="setup-section-heading">
+            <span>01</span>
+            <div><p class="eyebrow">Available now</p><h2 id="managed-heading">Managed providers</h2></div>
+          </div>
+          <div class="provider-choice-grid">
+            {% for provider in providers if provider.mode == "managed" %}
+            <article class="provider-choice {% if provider.detected %}detected{% endif %}">
+              <div class="provider-choice-top">
+                <span class="provider-glyph">{{ provider.name[:2] | upper }}</span>
+                <span class="detection-pill"><i></i>{{ "Detected" if provider.detected else "Not detected" }}</span>
+              </div>
+              <h3>{{ provider.name }}</h3>
+              <p>{{ provider.description }}</p>
+              <div class="resource-toggle-list">
+                {% for resource in provider.resources %}
+                <label class="resource-toggle">
+                  <input type="checkbox" name="provider_resource" value="{{ provider.id }}.{{ resource.id }}" {% if resource.selected %}checked{% endif %}>
+                  <span><strong>{{ resource.name }}</strong><small>{{ "Source found" if resource.available else "Can be enabled before installation" }}</small></span>
+                </label>
+                {% endfor %}
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+        </section>
+
+        <section class="setup-section" aria-labelledby="storage-heading">
+          <div class="setup-section-heading">
+            <span>02</span>
+            <div><p class="eyebrow">Durable copies</p><h2 id="storage-heading">Choose storage</h2></div>
+          </div>
+          <div class="storage-choice-grid">
+            <label class="storage-choice">
+              <input type="checkbox" name="local_enabled" {% if local_storage_enabled %}checked{% endif %}>
+              <span><strong>Local catalog</strong><small>Use a folder, cloud drive, NAS, or synced directory.</small></span>
+            </label>
+            <label class="storage-choice">
+              <input type="checkbox" name="git_enabled" {% if git_storage_enabled %}checked{% endif %}>
+              <span><strong>Managed Git</strong><small>AI Kit fetches, commits, and pushes through your Git credentials.</small></span>
+            </label>
+          </div>
+          <div class="storage-fields">
+            <label>Local catalog directory<input type="text" name="storage_local" value="{{ local_storage_path or default_local_storage_path }}" autocomplete="off"></label>
+            <label>Private Git repository URL<input type="text" name="storage_git" value="{{ git_storage_url }}" placeholder="git@github.com:owner/private-catalog.git" autocomplete="off" spellcheck="false"></label>
+          </div>
+        </section>
+
+        <section class="setup-section future-providers" aria-labelledby="detected-heading">
+          <div class="setup-section-heading">
+            <span>03</span>
+            <div><p class="eyebrow">Provider map</p><h2 id="detected-heading">Detected ecosystem</h2></div>
+          </div>
+          <p class="section-copy">These providers are recognized now. Typed resource support will arrive without unsafe generic file copying.</p>
+          <div class="detected-provider-list">
+            {% for provider in providers if provider.mode == "detection-only" %}
+            <div class="detected-provider {% if provider.detected %}detected{% endif %}">
+              <span class="provider-glyph">{{ provider.name[:2] | upper }}</span>
+              <span><strong>{{ provider.name }}</strong><small>{{ provider.resource_labels | join(" / ") }}</small></span>
+              <b>{{ "Found" if provider.detected else "Planned" }}</b>
+            </div>
+            {% endfor %}
+          </div>
+        </section>
+
+        <button type="submit" class="setup-submit">Preview machine setup <span aria-hidden="true">-&gt;</span></button>
+      </form>
+
+      <div id="operation-panel" class="operation-panel onboarding-operation-panel" aria-live="polite">
+        <div class="empty-panel"><span class="empty-glyph">REVIEW</span><p>Your provider and storage choices will appear here as a dry run before configuration is saved.</p></div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

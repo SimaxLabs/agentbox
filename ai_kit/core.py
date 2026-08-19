@@ -32,6 +32,8 @@ except ImportError:  # pragma: no cover - POSIX has no msvcrt.
 
 
 VERSION = 1
+CONFIG_VERSION = 2
+PROVIDER_DEFINITIONS_VERSION = 1
 GIT_TIMEOUT_SECONDS = 120
 _GENERATED_SKILL_DIRECTORY_MODE = 0o755
 _GENERATED_SKILL_FILE_MODE = 0o644
@@ -108,6 +110,7 @@ class OperationRequest:
     force: bool = False
     storage_local: str | None = None
     storage_git: str | None = None
+    provider_resources: tuple[str, ...] = ()
 
 
 @dataclass
@@ -133,6 +136,15 @@ def expand_path(value: str, base: Path) -> Path:
     if not expanded.is_absolute():
         expanded = base / expanded
     return expanded
+
+
+def expand_provider_path(value: str, base: Path) -> Path:
+    if value.startswith("$XDG_CONFIG_HOME/"):
+        configured = os.environ.get("XDG_CONFIG_HOME", "")
+        candidate = Path(os.path.expandvars(os.path.expanduser(configured)))
+        if not configured or not candidate.is_absolute():
+            value = "~/.config/" + value.removeprefix("$XDG_CONFIG_HOME/")
+    return expand_path(value, base)
 
 
 def user_data_root() -> Path:
@@ -197,7 +209,12 @@ def _parse_storage(config: dict, base: Path) -> tuple[Path | None, str | None, P
         raise AiKitError("Use storage.local to configure local catalog storage")
     storage = config.get("storage")
     if storage is None:
-        return default_local_catalog(), None, None
+        local_root = default_local_catalog()
+        if local_root.is_symlink():
+            raise AiKitError("Symlinked catalog roots are not supported: {}".format(local_root))
+        if local_root.exists() and not local_root.is_dir():
+            raise AiKitError("Catalog root is not a directory: {}".format(local_root))
+        return local_root, None, None
     if not isinstance(storage, dict):
         raise AiKitError("storage must be an object")
     unknown = set(storage) - {"local", "git"}
@@ -231,6 +248,15 @@ def _parse_storage(config: dict, base: Path) -> tuple[Path | None, str | None, P
     else:
         checkout = None
     local_root = expand_path(local_value, base) if local_value is not None else None
+    if local_root is not None and local_root.is_symlink():
+        raise AiKitError("Symlinked catalog roots are not supported: {}".format(local_root))
+    if local_root is not None and local_root.exists() and not local_root.is_dir():
+        raise AiKitError("Catalog root is not a directory: {}".format(local_root))
+    git_catalog = checkout / "catalog" if checkout is not None else None
+    if git_catalog is not None and git_catalog.is_symlink():
+        raise AiKitError("Symlinked catalog roots are not supported: {}".format(git_catalog))
+    if git_catalog is not None and git_catalog.exists() and not git_catalog.is_dir():
+        raise AiKitError("Catalog root is not a directory: {}".format(git_catalog))
     return local_root, git_url, checkout
 
 
@@ -243,18 +269,153 @@ def load_json(path: Path, default: dict) -> dict:
         raise AiKitError("Cannot read {}: {}".format(path, exc))
 
 
-def write_json(path: Path, value: dict) -> None:
+def load_provider_definitions() -> list[dict]:
+    path = Path(__file__).resolve().with_name("providers.json")
+    document = load_json(path, {})
+    if document.get("version") != PROVIDER_DEFINITIONS_VERSION:
+        raise AiKitError("{} must declare version {}".format(path, PROVIDER_DEFINITIONS_VERSION))
+    providers = document.get("providers")
+    if not isinstance(providers, list) or not providers:
+        raise AiKitError("{} must define providers".format(path))
+    seen = set()
+    for provider in providers:
+        provider_id = provider.get("id") if isinstance(provider, dict) else None
+        if (
+            not isinstance(provider_id, str)
+            or not CONFIG_NAME.fullmatch(provider_id)
+            or provider_id in seen
+        ):
+            raise AiKitError("Provider IDs in {} must be valid and unique".format(path))
+        seen.add(provider_id)
+        if provider.get("mode") not in ("managed", "detection-only"):
+            raise AiKitError("Invalid provider mode for {}".format(provider_id))
+        if not isinstance(provider.get("name"), str) or not provider["name"].strip():
+            raise AiKitError("Provider {} must have a name".format(provider_id))
+        markers = provider.get("detect")
+        if not isinstance(markers, list) or not all(
+            isinstance(marker, str) and marker for marker in markers
+        ):
+            raise AiKitError("Provider {} must define detection paths".format(provider_id))
+        if provider["mode"] != "managed":
+            continue
+        resources = provider.get("resources")
+        if not isinstance(resources, dict) or set(resources) != {"skills", "commands"}:
+            raise AiKitError("Managed provider {} must define skills and commands".format(provider_id))
+        source_ids = set()
+        for kind, resource in resources.items():
+            if not isinstance(resource, dict) or not isinstance(resource.get("target"), str):
+                raise AiKitError("Invalid {} resource for {}".format(kind, provider_id))
+            sources = resource.get("sources")
+            if not isinstance(sources, list):
+                raise AiKitError("Invalid {} sources for {}".format(kind, provider_id))
+            for source in sources:
+                source_id = source.get("id") if isinstance(source, dict) else None
+                if (
+                    not isinstance(source_id, str)
+                    or not CONFIG_NAME.fullmatch(source_id)
+                    or source_id in source_ids
+                    or not isinstance(source.get("path"), str)
+                ):
+                    raise AiKitError("Source IDs for {} must be valid and unique".format(provider_id))
+                source_ids.add(source_id)
+    return providers
+
+
+def managed_provider_ids() -> list[str]:
+    return [
+        provider["id"]
+        for provider in load_provider_definitions()
+        if provider["mode"] == "managed"
+    ]
+
+
+def _optional_expanded_path(value: str) -> Path | None:
+    if value.startswith("$XDG_CONFIG_HOME/"):
+        return expand_provider_path(value, Path.home())
+    variables = re.findall(r"\$([A-Za-z_][A-Za-z0-9_]*)", value)
+    if any(variable not in os.environ for variable in variables):
+        return None
+    return Path(os.path.expandvars(os.path.expanduser(value)))
+
+
+def provider_detection(config: dict | None = None) -> list[dict]:
+    settings = config.get("providers", {}) if config is not None else {}
+    results = []
+    for provider in load_provider_definitions():
+        markers = [
+            path
+            for value in provider["detect"]
+            if (path := _optional_expanded_path(value)) is not None
+        ]
+        detected = any(
+            path.exists() and not path.is_symlink() and (path.is_dir() or path.is_file())
+            for path in markers
+        )
+        configured = settings.get(provider["id"], {})
+        resources = []
+        if provider["mode"] == "managed":
+            selected_resources = configured.get("resources", {})
+            for kind, definition in provider["resources"].items():
+                sources = []
+                for source in definition["sources"]:
+                    path = expand_provider_path(source["path"], Path.home())
+                    sources.append(
+                        {
+                            "id": source["id"],
+                            "path": str(path),
+                            "available": path.is_dir() and not path.is_symlink(),
+                        }
+                    )
+                resources.append(
+                    {
+                        "id": kind,
+                        "name": definition.get("name", kind.title()),
+                        "selected": bool(configured.get("enabled", detected))
+                        and bool(
+                            selected_resources.get(
+                                kind, any(source["available"] for source in sources)
+                            )
+                        ),
+                        "sources": sources,
+                        "available": any(source["available"] for source in sources),
+                    }
+                )
+        results.append(
+            {
+                "id": provider["id"],
+                "name": provider["name"],
+                "description": provider.get("description", ""),
+                "mode": provider["mode"],
+                "detected": detected,
+                "selected": bool(configured.get("enabled", detected)),
+                "markers": [str(path) for path in markers],
+                "resources": resources,
+                "resource_labels": provider.get("resource_labels", []),
+            }
+        )
+    return results
+
+
+def write_json(path: Path, value: dict, create_mode: int | None = None) -> None:
     existing_mode = None
     if path.exists() and not path.is_symlink() and path.is_file():
         existing_mode = stat.S_IMODE(path.stat().st_mode)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name("{}.tmp-{}".format(path.name, uuid.uuid4().hex))
     try:
-        temporary.write_text(
-            json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        if existing_mode is not None:
-            temporary.chmod(existing_mode)
+        desired_mode = existing_mode if existing_mode is not None else create_mode
+        serialized = json.dumps(value, indent=2, sort_keys=True) + "\n"
+        if desired_mode is not None:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                desired_mode,
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as destination:
+                temporary.chmod(desired_mode)
+                destination.write(serialized)
+        else:
+            temporary.write_text(serialized, encoding="utf-8")
         temporary.replace(path)
     finally:
         if temporary.exists():
@@ -262,12 +423,22 @@ def write_json(path: Path, value: dict) -> None:
 
 
 def load_config(path: Path, host_override: str | None = None) -> dict:
+    if not path.exists():
+        raise AiKitError("No configuration found at {}; run ai-kit ui to complete setup".format(path))
     config = load_json(path, {})
-    if config.get("version") != VERSION:
-        raise AiKitError("{} must declare version {}".format(path, VERSION))
-    tools = config.get("tools")
-    if not isinstance(tools, dict) or not tools:
-        raise AiKitError("{} must define at least one tool".format(path))
+    if config.get("version") != CONFIG_VERSION:
+        raise AiKitError("{} must declare configuration version {}".format(path, CONFIG_VERSION))
+    provider_settings = config.get("providers")
+    if not isinstance(provider_settings, dict):
+        raise AiKitError("{} must define provider settings".format(path))
+    definitions = {
+        provider["id"]: provider
+        for provider in load_provider_definitions()
+        if provider["mode"] == "managed"
+    }
+    unknown = set(provider_settings) - set(definitions)
+    if unknown:
+        raise AiKitError("Unknown provider setting(s): {}".format(", ".join(sorted(unknown))))
     base = path.parent
     host = (
         host_override
@@ -316,29 +487,47 @@ def load_config(path: Path, host_override: str | None = None) -> dict:
         if safety_backups is not None
         else user_state_root() / "backups"
     )
-    for tool_name, tool in tools.items():
-        if not CONFIG_NAME.fullmatch(tool_name):
-            raise AiKitError("Invalid tool name in {}: {}".format(path, tool_name))
+    tools = {}
+    for tool_name, definition in definitions.items():
+        setting = provider_settings.get(tool_name, {})
+        if not isinstance(setting, dict) or not isinstance(setting.get("enabled", False), bool):
+            raise AiKitError("Invalid provider setting for {}".format(tool_name))
+        resource_settings = setting.get("resources", {})
+        if not isinstance(resource_settings, dict) or set(resource_settings) - {
+            "skills",
+            "commands",
+        }:
+            raise AiKitError("Invalid resource settings for {}".format(tool_name))
+        if not all(isinstance(value, bool) for value in resource_settings.values()):
+            raise AiKitError("Resource settings for {} must be boolean".format(tool_name))
+        if not setting.get("enabled", False) and any(resource_settings.values()):
+            raise AiKitError(
+                "Disabled provider {} cannot have enabled resources".format(tool_name)
+            )
+        if setting.get("enabled", False) and not any(resource_settings.values()):
+            raise AiKitError("Enabled provider {} must enable a resource".format(tool_name))
+        if not setting.get("enabled", False) or not any(resource_settings.values()):
+            continue
+        tool = {"_name": definition["name"], "_description": definition.get("description", "")}
         for kind in ("skills", "commands"):
-            section = tool.get(kind)
-            if not isinstance(section, dict):
-                raise AiKitError("{}.{} is missing from {}".format(tool_name, kind, path))
-            section["_target"] = expand_path(section["target"], base)
-            seen = set()
-            parsed_sources = []
-            for source in section.get("sources", []):
-                source_id = source.get("id")
-                if (
-                    not isinstance(source_id, str)
-                    or not CONFIG_NAME.fullmatch(source_id)
-                    or source_id in seen
-                ):
-                    raise AiKitError("Source IDs for {}.{} must be unique".format(tool_name, kind))
-                seen.add(source_id)
-                parsed_sources.append(
-                    {"id": source_id, "path": expand_path(source["path"], base)}
-                )
-            section["_sources"] = parsed_sources
+            resource = definition["resources"][kind]
+            tool[kind] = {
+                "_enabled": bool(resource_settings.get(kind, False)),
+                "_name": resource.get("name", kind.title()),
+                "_target": expand_provider_path(resource["target"], base),
+                "_sources": [
+                    {
+                        "id": source["id"],
+                        "path": expand_provider_path(source["path"], base),
+                    }
+                    for source in resource["sources"]
+                ],
+            }
+        tools[tool_name] = tool
+    if not tools:
+        raise AiKitError("{} must enable at least one provider resource".format(path))
+    config["tools"] = tools
+    config["_provider_definitions"] = definitions
     return config
 
 
@@ -936,6 +1125,8 @@ def collect_tool_artifacts(
     receipts_to_clear = []
 
     for kind in ("skills", "commands"):
+        if not tool[kind]["_enabled"]:
+            continue
         for configured_source in tool[kind]["_sources"]:
             root = configured_source["path"]
             if not root.exists():
@@ -1488,7 +1679,7 @@ def scan_catalog(config: dict, source_tools: Sequence[str]) -> list[Artifact]:
         if root.is_symlink():
             raise AiKitError("Symlinked catalog paths are not supported for {}".format(tool_name))
         skills = root / "skills"
-        if skills.exists():
+        if config["tools"][tool_name]["skills"]["_enabled"] and skills.exists():
             validate_regular_payload(skills)
             for skill_dir in sorted(item for item in skills.iterdir() if item.is_dir()):
                 if not (skill_dir / "SKILL.md").is_file():
@@ -1504,7 +1695,7 @@ def scan_catalog(config: dict, source_tools: Sequence[str]) -> list[Artifact]:
                     )
                 )
         commands = root / "commands"
-        if commands.exists():
+        if config["tools"][tool_name]["commands"]["_enabled"] and commands.exists():
             validate_regular_payload(commands)
             for command in sorted(commands.rglob("*.md")):
                 relative = command.relative_to(commands).as_posix()
@@ -1640,6 +1831,8 @@ def prepare_portable_restore(
     source_tools: Sequence[str],
     force: bool,
 ) -> list[tuple[Candidate, Path, str, bool]]:
+    if not config["tools"][target_tool]["skills"]["_enabled"]:
+        raise AiKitError("Portable restore requires skills enabled for {}".format(target_tool))
     artifacts = scan_catalog_hosts(config, source_hosts, source_tools)
     candidates, errors = build_candidates(artifacts)
     if errors:
@@ -1751,6 +1944,9 @@ def prepare_exact_restore(
     operations = []
     claimed_destinations = {}
     for entry in manifest["artifacts"]:
+        section_name = "skills" if entry["kind"] == "skill" else "commands"
+        if not config["tools"][tool_name][section_name]["_enabled"]:
+            continue
         entry_path = safe_relative_path(entry["path"])
         payload = checked_join(tool_root, entry_path)
         if not payload.exists():
@@ -2031,6 +2227,14 @@ def _run_catalog_operation(
 
     state = load_state(config)
     selected = tool_names if request.tool == "all" else [request.tool]
+    if request.action == "restore" and not request.as_backed_up and request.tool == "all":
+        selected = [
+            tool_name
+            for tool_name in selected
+            if config["tools"][tool_name]["skills"]["_enabled"]
+        ]
+        if not selected:
+            raise AiKitError("Portable restore requires at least one provider with skills enabled")
     total = 0
     if request.action == "backup":
         prepared = []
@@ -2176,6 +2380,110 @@ def _configured_storage_update(config_path: Path, request: OperationRequest) -> 
     return candidate
 
 
+def write_config(path: Path, value: dict) -> None:
+    if path.is_symlink():
+        raise AiKitError("Symlinked configuration files are not supported: {}".format(path))
+    for parent in (path.parent, *path.parents):
+        if parent.is_symlink():
+            raise AiKitError("Symlinked configuration directories are not supported: {}".format(parent))
+        if parent.exists() and not parent.is_dir():
+            raise AiKitError("Configuration parent is not a directory: {}".format(parent))
+    write_json(path, value, create_mode=0o600)
+
+
+def _configured_provider_update(config_path: Path, request: OperationRequest) -> dict:
+    definitions = {
+        provider["id"]: provider
+        for provider in load_provider_definitions()
+        if provider["mode"] == "managed"
+    }
+    selected = set(request.provider_resources)
+    valid = {
+        "{}.{}".format(provider_id, kind)
+        for provider_id in definitions
+        for kind in ("skills", "commands")
+    }
+    if not selected or selected - valid:
+        raise AiKitError("Select at least one valid provider resource")
+    if request.storage_local is None and request.storage_git is None:
+        raise AiKitError("Select local storage, Git storage, or both")
+    candidate = load_json(config_path, {}) if config_path.exists() else {}
+    candidate.pop("tools", None)
+    candidate["version"] = CONFIG_VERSION
+    candidate["providers"] = {
+        provider_id: {
+            "enabled": any(
+                "{}.{}".format(provider_id, kind) in selected
+                for kind in ("skills", "commands")
+            ),
+            "resources": {
+                kind: "{}.{}".format(provider_id, kind) in selected
+                for kind in ("skills", "commands")
+            },
+        }
+        for provider_id in definitions
+    }
+    storage = {}
+    if request.storage_local is not None:
+        storage["local"] = request.storage_local.strip()
+    if request.storage_git is not None:
+        storage["git"] = request.storage_git.strip()
+    if storage:
+        candidate["storage"] = storage
+    else:
+        candidate.pop("storage", None)
+    _parse_storage(candidate, config_path.parent)
+    return candidate
+
+
+def configure_providers(
+    config_path: Path,
+    request: OperationRequest,
+    report: Reporter,
+    pre_plan: Callable[[], None] | None,
+    pre_apply: Callable[[], None] | None,
+) -> int:
+    candidate = _configured_provider_update(config_path, request)
+    current = load_json(config_path, {}) if config_path.exists() else {}
+    if pre_plan is not None:
+        pre_plan()
+    selected = set(request.provider_resources)
+    for provider in load_provider_definitions():
+        if provider["mode"] != "managed":
+            continue
+        enabled = [
+            provider["resources"][kind].get("name", kind.title())
+            for kind in ("skills", "commands")
+            if "{}.{}".format(provider["id"], kind) in selected
+        ]
+        state = ", ".join(enabled) if enabled else "disabled"
+        report(
+            OperationEvent(
+                "provider-config",
+                "PROVIDER {}: {}".format(provider["name"], state),
+                provider["id"],
+            )
+        )
+    storage = candidate.get("storage", {"local": str(default_local_catalog())})
+    if "local" in storage:
+        report(OperationEvent("storage-config", "LOCAL STORAGE {}".format(storage["local"])))
+    if "git" in storage:
+        report(
+            OperationEvent(
+                "storage-config", "GIT STORAGE {}".format(redacted_git_url(storage["git"]))
+            )
+        )
+    if candidate == current:
+        report(OperationEvent("unchanged", "PROVIDER CONFIGURATION UNCHANGED"))
+        return 0
+    report(OperationEvent("provider-config", "UPDATE PROVIDER CONFIGURATION"))
+    if not request.dry_run:
+        if pre_apply is not None:
+            pre_apply()
+        write_config(config_path, candidate)
+    return 1
+
+
 def configure_storage(
     config_path: Path,
     request: OperationRequest,
@@ -2208,7 +2516,7 @@ def configure_storage(
     if not request.dry_run:
         if pre_apply is not None:
             pre_apply()
-        write_json(config_path, candidate)
+        write_config(config_path, candidate)
     return 1
 
 
@@ -2222,6 +2530,18 @@ def run_operation(
 ) -> int:
     """Run one validated operation and return its change or drift count."""
     config_path = config_path.expanduser().resolve()
+    if request.action == "providers":
+        if acquire_lock:
+            with operation_guard(config_path):
+                return run_operation(
+                    config_path,
+                    request,
+                    report,
+                    acquire_lock=False,
+                    pre_plan=pre_plan,
+                    pre_apply=pre_apply,
+                )
+        return configure_providers(config_path, request, report, pre_plan, pre_apply)
     if acquire_lock:
         preliminary = load_config(config_path, request.host)
         locked_identities = storage_lock_identities(preliminary)

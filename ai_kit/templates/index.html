@@ -40,14 +40,14 @@
   </header>
 
   <main>
-    <section class="hero">
+    <section class="hero hub-hero">
       <div>
         <p class="kicker">Local control plane</p>
-        <h1>Move agent knowledge<br>without losing its lineage.</h1>
+        <h1>One catalog.<br>Every agent.</h1>
       </div>
       <div class="hero-side">
         <img class="hero-logo" src="/static/logo.png" alt="AI Kit backup toolkit">
-        <p class="hero-copy">Inspect exact backups, preview every write, and restore portable skills across your coding tools. Nothing executes until its dry run is reviewed.</p>
+        <p class="hero-copy">Your provider map, resources, storage, and exact history stay under local control. Nothing executes until its dry run is reviewed.</p>
       </div>
     </section>
 
@@ -79,7 +79,7 @@
             Target tool
             <select name="tool">
               <option value="all">All configured tools</option>
-              {% for tool in tool_names %}<option value="{{ tool }}">{{ tool }}</option>{% endfor %}
+              {% for tool in tools %}<option value="{{ tool.id }}">{{ tool.name }}</option>{% endfor %}
             </select>
           </label>
           <label class="check-row">
@@ -108,7 +108,7 @@
               Target tool
               <select name="tool">
                 <option value="all">All configured tools</option>
-                {% for tool in tool_names %}<option value="{{ tool }}">{{ tool }}</option>{% endfor %}
+                {% for tool in tools %}<option value="{{ tool.id }}" data-portable="{{ 'true' if tool.portable_target else 'false' }}">{{ tool.name }}</option>{% endfor %}
               </select>
             </label>
             <label>
@@ -124,7 +124,7 @@
             <select name="source_mode" data-source-mode>
               <option value="matching">Matching target tool</option>
               <option value="all">Every tool catalog</option>
-              {% for tool in tool_names %}<option value="tool:{{ tool }}">Only {{ tool }}</option>{% endfor %}
+              {% for tool in tools %}<option value="tool:{{ tool.id }}">Only {{ tool.name }}</option>{% endfor %}
             </select>
           </label>
           <div class="check-grid">

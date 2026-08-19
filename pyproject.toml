@@ -33,7 +33,8 @@ packages = ["ai_kit"]
 
 [tool.setuptools.package-data]
 ai_kit = [
-  "default_config.json",
+    "default_config.json",
+    "providers.json",
   "templates/*.html",
   "templates/partials/*.html",
   "static/*.css",
