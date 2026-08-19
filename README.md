@@ -1,8 +1,8 @@
-<p align="center">
-  <img src="logo.png" alt="AI Kit logo" width="200">
-</p>
-
 # AI Kit
+
+<p align="center">
+  <img src="logo.png" alt="AI Kit logo" width="150">
+</p>
 
 AI Kit keeps exact backups of personal skills, commands, and legacy prompts used by AI coding tools. Backups are separated by hostname so multiple teammates can safely share one repository.
 
