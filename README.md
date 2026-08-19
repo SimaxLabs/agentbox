@@ -6,7 +6,7 @@ The repository is the durable backup. Tool directories are working copies.
 
 ## Requirements
 
-- Python 3.8 or newer
+- Python 3.14 or newer
 - The CLI has no third-party runtime dependencies.
 - The browser and desktop interfaces use optional dependencies installed below.
 

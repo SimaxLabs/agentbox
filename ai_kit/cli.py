@@ -2,8 +2,8 @@
 
 import argparse
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
 
 from .core import AiKitError, OperationRequest, load_config, run_operation
 from .paths import default_config_path
@@ -12,7 +12,7 @@ from .paths import default_config_path
 def parse_args(
     tool_names: Sequence[str],
     default_config: Path,
-    arguments: Optional[Sequence[str]] = None,
+    arguments: Sequence[str] | None = None,
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Back up and restore skills and commands across AI coding tools."
@@ -79,8 +79,8 @@ def parse_args(
 
 
 def main(
-    arguments: Optional[Sequence[str]] = None,
-    repository_config: Optional[Path] = None,
+    arguments: Sequence[str] | None = None,
+    repository_config: Path | None = None,
 ) -> int:
     default_config = default_config_path(repository_config)
     bootstrap = argparse.ArgumentParser(add_help=False)
@@ -123,7 +123,7 @@ def main(
     return 0
 
 
-def entrypoint(repository_config: Optional[Path] = None) -> None:
+def entrypoint(repository_config: Path | None = None) -> None:
     try:
         raise SystemExit(main(repository_config=repository_config))
     except AiKitError as exc:

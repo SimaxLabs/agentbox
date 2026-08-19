@@ -2,14 +2,14 @@
 
 import argparse
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
 
 from .core import AiKitError
 from .paths import default_config_path
 
 
-def main(arguments: Optional[Sequence[str]] = None) -> int:
+def main(arguments: Sequence[str] | None = None) -> int:
     from .web import run_browser
 
     parser = argparse.ArgumentParser(description="Open the AI Kit browser interface.")

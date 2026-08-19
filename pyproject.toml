@@ -7,8 +7,12 @@ name = "ai-kit-workbench"
 version = "0.2.0"
 description = "Back up and restore skills and commands across AI coding tools."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.14"
 dependencies = []
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.14",
+]
 
 [project.optional-dependencies]
 ui = [

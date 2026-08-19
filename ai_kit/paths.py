@@ -2,10 +2,9 @@
 
 import os
 from pathlib import Path
-from typing import Optional
 
 
-def default_config_path(repository_default: Optional[Path] = None) -> Path:
+def default_config_path(repository_default: Path | None = None) -> Path:
     override = os.environ.get("AI_KIT_CONFIG")
     if override:
         return Path(override).expanduser().resolve()

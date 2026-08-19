@@ -2,6 +2,7 @@
 """Back up and restore AI coding-agent skills and commands."""
 
 import ast
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import contextmanager
 import hashlib
 import json
@@ -14,9 +15,8 @@ import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:
     import fcntl
@@ -54,16 +54,16 @@ class Artifact:
     name: str
     catalog_path: str
     payload: Path
-    sources: List[Source] = field(default_factory=list)
+    sources: list[Source] = field(default_factory=list)
     host: str = ""
 
 
 @dataclass
 class Candidate:
     name: str
-    payload: Optional[Path]
-    generated: Optional[bytes]
-    origins: List[Dict[str, str]]
+    payload: Path | None
+    generated: bytes | None
+    origins: list[dict[str, str]]
 
     def fingerprint(self) -> str:
         if self.generated is not None:
@@ -81,7 +81,7 @@ class OperationEvent:
     artifact: str = ""
 
 
-Reporter = Callable[[OperationEvent], None]
+type Reporter = Callable[[OperationEvent], None]
 
 
 def console_report(event: OperationEvent) -> None:
@@ -92,11 +92,11 @@ def console_report(event: OperationEvent) -> None:
 class OperationRequest:
     action: str
     tool: str = "all"
-    host: Optional[str] = None
+    host: str | None = None
     dry_run: bool = False
     prune: bool = False
     include_derived: bool = False
-    source_tool: Optional[str] = None
+    source_tool: str | None = None
     all_tools: bool = False
     all_hosts: bool = False
     as_backed_up: bool = False
@@ -132,7 +132,7 @@ def write_json(path: Path, value: dict) -> None:
             temporary.unlink()
 
 
-def load_config(path: Path, host_override: Optional[str] = None) -> dict:
+def load_config(path: Path, host_override: str | None = None) -> dict:
     config = load_json(path, {})
     if config.get("version") != VERSION:
         raise AiKitError("{} must declare version {}".format(path, VERSION))
@@ -202,7 +202,7 @@ def config_for_host(config: dict, host: str) -> dict:
     return selected
 
 
-def catalog_hosts(config: dict) -> List[str]:
+def catalog_hosts(config: dict) -> list[str]:
     root = config["_catalog_root"]
     if not root.exists():
         return []
@@ -293,7 +293,7 @@ def hash_path(path: Path) -> str:
     return digest.hexdigest()
 
 
-def split_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
+def split_frontmatter(content: str) -> tuple[dict[str, str], str]:
     lines = content.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
         return {}, content
@@ -427,7 +427,7 @@ def load_state(config: dict) -> dict:
     return state
 
 
-def receipt_for(state: dict, physical_path: Path) -> Optional[dict]:
+def receipt_for(state: dict, physical_path: Path) -> dict | None:
     return state.get("deployments", {}).get(str(physical_path.absolute()))
 
 
@@ -474,12 +474,12 @@ def collect_tool_artifacts(
     tool_name: str,
     state: dict,
     include_derived: bool,
-    portable_index: Dict[Tuple[str, str], List[dict]],
+    portable_index: dict[tuple[str, str], list[dict]],
     own_catalog_keys: set,
     report: Reporter = console_report,
-) -> Tuple[List[Artifact], List[str], set, List[str]]:
+) -> tuple[list[Artifact], list[str], set, list[str]]:
     tool = config["tools"][tool_name]
-    artifacts: Dict[Tuple[str, str], Artifact] = {}
+    artifacts: dict[tuple[str, str], Artifact] = {}
     errors = []
     available_sources = set()
     receipts_to_clear = []
@@ -844,7 +844,7 @@ def backup_tool(
     return changes
 
 
-def scan_catalog(config: dict, source_tools: Sequence[str]) -> List[Artifact]:
+def scan_catalog(config: dict, source_tools: Sequence[str]) -> list[Artifact]:
     artifacts = []
     for tool_name in source_tools:
         root = config["_catalog"] / tool_name
@@ -886,7 +886,7 @@ def scan_catalog(config: dict, source_tools: Sequence[str]) -> List[Artifact]:
 
 def scan_catalog_hosts(
     config: dict, source_hosts: Sequence[str], source_tools: Sequence[str]
-) -> List[Artifact]:
+) -> list[Artifact]:
     artifacts = []
     for host in source_hosts:
         artifacts.extend(scan_catalog(config_for_host(config, host), source_tools))
@@ -923,8 +923,8 @@ def convert_command(artifact: Artifact) -> bytes:
     return ("\n".join(result).rstrip() + "\n").encode("utf-8")
 
 
-def build_candidates(artifacts: Sequence[Artifact]) -> Tuple[List[Candidate], List[str]]:
-    candidates: Dict[str, Candidate] = {}
+def build_candidates(artifacts: Sequence[Artifact]) -> tuple[list[Candidate], list[str]]:
+    candidates: dict[str, Candidate] = {}
     errors = []
     for artifact in artifacts:
         origin = {
@@ -964,9 +964,9 @@ def build_candidates(artifacts: Sequence[Artifact]) -> Tuple[List[Candidate], Li
 def build_portable_index(
     config: dict,
     source_tools: Sequence[str],
-    source_hosts: Optional[Sequence[str]] = None,
-) -> Dict[Tuple[str, str], List[dict]]:
-    index: Dict[Tuple[str, str], List[dict]] = {}
+    source_hosts: Sequence[str] | None = None,
+) -> dict[tuple[str, str], list[dict]]:
+    index: dict[tuple[str, str], list[dict]] = {}
     hosts = list(source_hosts) if source_hosts is not None else [config["_host"]]
     for artifact in scan_catalog_hosts(config, hosts, source_tools):
         fingerprint = artifact_portable_fingerprint(artifact)
@@ -1002,7 +1002,7 @@ def prepare_portable_restore(
     source_hosts: Sequence[str],
     source_tools: Sequence[str],
     force: bool,
-) -> List[Tuple[Candidate, Path, str, bool]]:
+) -> list[tuple[Candidate, Path, str, bool]]:
     artifacts = scan_catalog_hosts(config, source_hosts, source_tools)
     candidates, errors = build_candidates(artifacts)
     if errors:
@@ -1031,10 +1031,10 @@ def restore_portable(
     target_tool: str,
     dry_run: bool,
     state: dict,
-    operations: Sequence[Tuple[Candidate, Path, str, bool]],
+    operations: Sequence[tuple[Candidate, Path, str, bool]],
     report: Reporter = console_report,
 ) -> int:
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
     backup_root = config["_safety_backups"] / timestamp
     changes = 0
 
@@ -1081,7 +1081,7 @@ def restore_portable(
 
 
 def validate_portable_target_operations(
-    prepared: Dict[str, Sequence[Tuple[Candidate, Path, str, bool]]]
+    prepared: dict[str, Sequence[tuple[Candidate, Path, str, bool]]]
 ) -> None:
     destinations = {}
     for target_tool, operations in prepared.items():
@@ -1098,7 +1098,9 @@ def validate_portable_target_operations(
             destinations[key] = target_tool
 
 
-def configured_source_root(config: dict, tool_name: str, kind: str, source_id: str) -> Optional[Path]:
+def configured_source_root(
+    config: dict, tool_name: str, kind: str, source_id: str
+) -> Path | None:
     section = config["tools"][tool_name]["skills" if kind == "skill" else "commands"]
     for source in section["_sources"]:
         if source["id"] == source_id:
@@ -1110,7 +1112,7 @@ def prepare_exact_restore(
     config: dict,
     tool_name: str,
     force: bool,
-) -> List[Tuple[dict, Path, Path, bool, str]]:
+) -> list[tuple[dict, Path, Path, bool, str]]:
     manifest = load_manifest(config, tool_name)
     tool_root = config["_catalog"] / tool_name
     operations = []
@@ -1185,8 +1187,8 @@ def prepare_exact_restore(
 
 
 def combine_exact_operations(
-    operation_groups: Sequence[Sequence[Tuple[dict, Path, Path, bool, str]]]
-) -> List[Tuple[dict, Path, Path, bool, str]]:
+    operation_groups: Sequence[Sequence[tuple[dict, Path, Path, bool, str]]]
+) -> list[tuple[dict, Path, Path, bool, str]]:
     combined = []
     destinations = {}
     for operations in operation_groups:
@@ -1212,10 +1214,10 @@ def restore_as_backed_up(
     config: dict,
     tool_name: str,
     dry_run: bool,
-    operations: Sequence[Tuple[dict, Path, Path, bool, str]],
+    operations: Sequence[tuple[dict, Path, Path, bool, str]],
     report: Reporter = console_report,
 ) -> int:
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
     backup_root = config["_safety_backups"] / timestamp
     changes = 0
 
@@ -1251,7 +1253,7 @@ def status_tool(
     config: dict,
     tool_name: str,
     state: dict,
-    portable_index: Dict[Tuple[str, str], List[dict]],
+    portable_index: dict[tuple[str, str], list[dict]],
     report: Reporter = console_report,
 ) -> int:
     manifest = load_manifest(config, tool_name)
@@ -1375,7 +1377,7 @@ def run_operation(
     request: OperationRequest,
     report: Reporter = console_report,
     acquire_lock: bool = True,
-    pre_apply: Optional[Callable[[], None]] = None,
+    pre_apply: Callable[[], None] | None = None,
 ) -> int:
     """Run one validated operation and return its change or drift count."""
     config_path = config_path.expanduser().resolve()

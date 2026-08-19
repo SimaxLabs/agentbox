@@ -5,8 +5,8 @@ import socket
 import sys
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
 
 from .core import AiKitError
 from .paths import default_config_path
@@ -14,7 +14,7 @@ from .paths import default_config_path
 
 def run_desktop(
     config_path: Path,
-    host_override: Optional[str] = None,
+    host_override: str | None = None,
     debug: bool = False,
 ) -> int:
     import uvicorn
@@ -65,7 +65,7 @@ def run_desktop(
     return 0
 
 
-def main(arguments: Optional[Sequence[str]] = None) -> int:
+def main(arguments: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Open AI Kit in a native desktop window.")
     parser.add_argument("--config", default=str(default_config_path()))
     parser.add_argument("--host")

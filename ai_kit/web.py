@@ -10,7 +10,6 @@ import time
 import webbrowser
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -48,10 +47,10 @@ class OperationJob:
     job_id: str
     request: OperationRequest
     expected_plan: str
-    events: List[dict] = field(default_factory=list)
+    events: list[dict] = field(default_factory=list)
     done: bool = False
     condition: threading.Condition = field(default_factory=threading.Condition)
-    thread: Optional[threading.Thread] = field(default=None, repr=False)
+    thread: threading.Thread | None = field(default=None, repr=False)
 
     def publish(self, payload: dict) -> None:
         with self.condition:
@@ -130,7 +129,7 @@ def update_tree_fingerprint(digest: object, path: Path) -> None:
     digest.update(b"\0")
 
 
-def plan_signature(changes: int, events: List[dict], filesystem: str) -> str:
+def plan_signature(changes: int, events: list[dict], filesystem: str) -> str:
     reviewed = {
         "changes": changes,
         "filesystem": filesystem,
@@ -149,16 +148,16 @@ def plan_signature(changes: int, events: List[dict], filesystem: str) -> str:
 
 
 class WebRuntime:
-    def __init__(self, config_path: Path, host_override: Optional[str]) -> None:
+    def __init__(self, config_path: Path, host_override: str | None) -> None:
         self.config_path = config_path.expanduser().resolve()
         self.host_override = host_override
         self.csrf_token = secrets.token_urlsafe(32)
-        self.previews: Dict[str, StoredPreview] = {}
-        self.jobs: Dict[str, OperationJob] = {}
+        self.previews: dict[str, StoredPreview] = {}
+        self.jobs: dict[str, OperationJob] = {}
         self.state_lock = threading.Lock()
         self.operation_lock = threading.Lock()
 
-    def available_hosts(self) -> Tuple[dict, List[str]]:
+    def available_hosts(self) -> tuple[dict, list[str]]:
         config = load_config(self.config_path, self.host_override)
         hosts = set(catalog_hosts(config))
         hosts.add(config["_host"])
@@ -188,8 +187,8 @@ class WebRuntime:
             update_tree_fingerprint(digest, root)
         return digest.hexdigest()
 
-    def preview(self, request: OperationRequest) -> Tuple[str, int, List[dict]]:
-        events: List[dict] = []
+    def preview(self, request: OperationRequest) -> tuple[str, int, list[dict]]:
+        events: list[dict] = []
         preview_request = replace(request, dry_run=True)
         with self.operation_lock:
             with operation_guard(self.config_path):
@@ -248,7 +247,7 @@ class WebRuntime:
         try:
             with self.operation_lock:
                 with operation_guard(self.config_path):
-                    current_events: List[dict] = []
+                    current_events: list[dict] = []
                     filesystem_before = self.filesystem_signature(job.request)
                     current_changes = run_operation(
                         self.config_path,
@@ -308,7 +307,7 @@ class WebRuntime:
         return job
 
     def dashboard(self, selected_host: str) -> dict:
-        events: List[OperationEvent] = []
+        events: list[OperationEvent] = []
         with self.operation_lock:
             run_operation(
                 self.config_path,
@@ -431,7 +430,7 @@ def operation_label(request: OperationRequest) -> str:
     return "Restore {} to {}".format(mode, target)
 
 
-def create_app(config_path: Path, host_override: Optional[str] = None) -> FastAPI:
+def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
     runtime = WebRuntime(config_path, host_override)
     initial_config, _ = runtime.available_hosts()
     templates = Jinja2Templates(directory=str(PACKAGE_ROOT / "templates"))
@@ -472,14 +471,14 @@ def create_app(config_path: Path, host_override: Optional[str] = None) -> FastAP
         }
 
     @app.get("/", response_class=HTMLResponse)
-    async def index(request: Request, host: Optional[str] = None):
+    async def index(request: Request, host: str | None = None):
         selected_host = runtime.validate_host(host or initial_config["_host"])
         context = base_context(request, selected_host)
         context.update(await run_in_threadpool(runtime.dashboard, selected_host))
         return templates.TemplateResponse(request=request, name="index.html", context=context)
 
     @app.get("/dashboard", response_class=HTMLResponse)
-    async def dashboard(request: Request, host: Optional[str] = None):
+    async def dashboard(request: Request, host: str | None = None):
         selected_host = runtime.validate_host(host or initial_config["_host"])
         context = base_context(request, selected_host)
         context.update(await run_in_threadpool(runtime.dashboard, selected_host))
@@ -590,7 +589,7 @@ def create_app(config_path: Path, host_override: Optional[str] = None) -> FastAP
 
 def run_browser(
     config_path: Path,
-    host_override: Optional[str] = None,
+    host_override: str | None = None,
     bind: str = "127.0.0.1",
     port: int = 8765,
     open_browser: bool = True,
