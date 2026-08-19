@@ -470,18 +470,20 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
             "selected_host": selected_host,
         }
 
-    @app.get("/", response_class=HTMLResponse)
-    async def index(request: Request, host: str | None = None):
+    async def dashboard_context(request: Request, host: str | None) -> dict:
         selected_host = runtime.validate_host(host or initial_config["_host"])
         context = base_context(request, selected_host)
         context.update(await run_in_threadpool(runtime.dashboard, selected_host))
+        return context
+
+    @app.get("/", response_class=HTMLResponse)
+    async def index(request: Request, host: str | None = None):
+        context = await dashboard_context(request, host)
         return templates.TemplateResponse(request=request, name="index.html", context=context)
 
     @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard(request: Request, host: str | None = None):
-        selected_host = runtime.validate_host(host or initial_config["_host"])
-        context = base_context(request, selected_host)
-        context.update(await run_in_threadpool(runtime.dashboard, selected_host))
+        context = await dashboard_context(request, host)
         return templates.TemplateResponse(
             request=request, name="partials/dashboard.html", context=context
         )
@@ -563,7 +565,7 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
                 with job.condition:
                     if index >= len(job.events) and not job.done:
                         job.condition.wait(timeout=15)
-                    pending = list(job.events[index:])
+                    pending = job.events[index:]
                     finished = job.done and index + len(pending) >= len(job.events)
                 if not pending:
                     if finished:
@@ -573,7 +575,7 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
                 for payload in pending:
                     index += 1
                     yield "id: {}\ndata: {}\n\n".format(
-                        index, json.dumps(payload, ensure_ascii=True)
+                        index, json.dumps(payload)
                     )
                 if finished:
                     return

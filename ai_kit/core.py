@@ -30,6 +30,8 @@ except ImportError:  # pragma: no cover - POSIX has no msvcrt.
 
 
 VERSION = 1
+_GENERATED_SKILL_DIRECTORY_MODE = 0o755
+_GENERATED_SKILL_FILE_MODE = 0o644
 SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 CONFIG_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 PLACEHOLDER = re.compile(r"\$(?:ARGUMENTS(?:\[[0-9]+\])?|[A-Z][A-Z0-9_]*|[0-9]+)")
@@ -222,8 +224,8 @@ def catalog_hosts(config: dict) -> list[str]:
 
 def hash_generated_skill(content: bytes) -> str:
     digest = hashlib.sha256()
-    update_hash_entry(digest, ".", "directory", 0o755, b"")
-    update_hash_entry(digest, "SKILL.md", "file", 0o644, content)
+    update_hash_entry(digest, ".", "directory", _GENERATED_SKILL_DIRECTORY_MODE, b"")
+    update_hash_entry(digest, "SKILL.md", "file", _GENERATED_SKILL_FILE_MODE, content)
     return digest.hexdigest()
 
 
@@ -387,7 +389,7 @@ def safe_relative_path(value: str) -> Path:
     if not isinstance(value, str) or not value:
         raise AiKitError("Manifest paths must be non-empty strings")
     path = Path(value)
-    if path in (Path("."), Path("")) or path.is_absolute() or ".." in path.parts:
+    if path == Path(".") or path.is_absolute() or ".." in path.parts:
         raise AiKitError("Unsafe relative path in manifest: {}".format(value))
     return path
 
@@ -541,44 +543,36 @@ def collect_tool_artifacts(
                 if artifact_kind == "skill":
                     current_hash = hash_path(physical_path)
                     matches_portable = (name, current_hash) in portable_index
-                    if (
-                        current_key in own_catalog_keys
-                        and matches_portable
-                        and not include_derived
-                    ):
-                        own_payload = checked_join(
-                            config["_catalog"] / tool_name,
-                            safe_relative_path(catalog_path),
-                        )
-                        if not own_payload.exists() or hash_path(own_payload) != current_hash:
-                            errors.append(
-                                "{} matches another catalog artifact but differs from its own "
-                                "backup; restore lineage is missing. Use --include-derived only "
-                                "if this copy should replace the {} backup.".format(
-                                    physical_path, tool_name
+                    if matches_portable and not include_derived:
+                        if current_key in own_catalog_keys:
+                            own_payload = checked_join(
+                                config["_catalog"] / tool_name,
+                                safe_relative_path(catalog_path),
+                            )
+                            if not own_payload.exists() or hash_path(own_payload) != current_hash:
+                                errors.append(
+                                    "{} matches another catalog artifact but differs from its own "
+                                    "backup; restore lineage is missing. Use --include-derived only "
+                                    "if this copy should replace the {} backup.".format(
+                                        physical_path, tool_name
+                                    )
+                                )
+                                continue
+                        else:
+                            report(
+                                OperationEvent(
+                                    "skip-duplicate",
+                                    "SKIP duplicate {}".format(physical_path),
+                                    tool_name,
+                                    str(physical_path),
                                 )
                             )
+                            receipts_to_clear.append(str(physical_path.absolute()))
                             continue
-                    if (
-                        current_key not in own_catalog_keys
-                        and matches_portable
-                        and not include_derived
-                    ):
-                        report(
-                            OperationEvent(
-                                "skip-duplicate",
-                                "SKIP duplicate {}".format(physical_path),
-                                tool_name,
-                                str(physical_path),
-                            )
-                        )
-                        receipts_to_clear.append(str(physical_path.absolute()))
-                        continue
                 source = Source(
                     configured_source["id"], root, relative_path, physical_path
                 )
-                key = current_key
-                existing = artifacts.get(key)
+                existing = artifacts.get(current_key)
                 if existing:
                     if hash_path(existing.payload) != hash_path(physical_path):
                         errors.append(
@@ -589,7 +583,7 @@ def collect_tool_artifacts(
                     else:
                         existing.sources.append(source)
                 else:
-                    artifacts[key] = Artifact(
+                    artifacts[current_key] = Artifact(
                         tool_name,
                         artifact_kind,
                         name,
@@ -691,11 +685,11 @@ def write_generated_skill(content: bytes, destination: Path) -> None:
     token = uuid.uuid4().hex
     staged = destination.with_name(".{}.ai-kit-new-{}".format(destination.name, token))
     try:
-        staged.mkdir(mode=0o755)
-        staged.chmod(0o755)
+        staged.mkdir(mode=_GENERATED_SKILL_DIRECTORY_MODE)
+        staged.chmod(_GENERATED_SKILL_DIRECTORY_MODE)
         skill_file = staged / "SKILL.md"
         skill_file.write_bytes(content)
-        skill_file.chmod(0o644)
+        skill_file.chmod(_GENERATED_SKILL_FILE_MODE)
         install_staged(staged, destination, token)
     finally:
         if staged.exists() or staged.is_symlink():
@@ -1278,7 +1272,7 @@ def status_tool(
     catalog_entries = {(item["kind"], item["path"]): item for item in manifest["artifacts"]}
     source_entries = {(item.kind, item.catalog_path): item for item in artifacts}
     drift = 0
-    for key, artifact in sorted(source_entries.items()):
+    for _, artifact in sorted(source_entries.items()):
         catalog_payload = checked_join(
             config["_catalog"] / tool_name,
             safe_relative_path(artifact.catalog_path),
@@ -1505,9 +1499,7 @@ def run_operation(
                 write_json(config["_state_file"], state)
         return total
 
-    if request.action == "status":
-        portable_index = build_portable_index(config, tool_names)
-        for tool_name in selected:
-            total += status_tool(config, tool_name, state, portable_index, report)
-        return total
-    raise AiKitError("Unknown action: {}".format(request.action))
+    portable_index = build_portable_index(config, tool_names)
+    for tool_name in selected:
+        total += status_tool(config, tool_name, state, portable_index, report)
+    return total

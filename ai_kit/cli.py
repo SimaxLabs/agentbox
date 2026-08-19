@@ -27,9 +27,10 @@ def parse_args(
         help="catalog hostname namespace (default: AI_KIT_HOST or detected hostname)",
     )
     subparsers = parser.add_subparsers(dest="action", required=True)
+    tool_choices = ["all", *tool_names]
 
     backup = subparsers.add_parser("backup", help="copy exact tool artifacts into the catalog")
-    backup.add_argument("tool", choices=["all"] + list(tool_names))
+    backup.add_argument("tool", choices=tool_choices)
     backup.add_argument("--dry-run", action="store_true")
     backup.add_argument("--prune", action="store_true", help="remove catalog entries absent at the source")
     backup.add_argument(
@@ -39,7 +40,7 @@ def parse_args(
     )
 
     restore = subparsers.add_parser("restore", help="restore catalog artifacts")
-    restore.add_argument("tool", choices=["all"] + list(tool_names))
+    restore.add_argument("tool", choices=tool_choices)
     restore.add_argument("--dry-run", action="store_true")
     restore.add_argument("--force", action="store_true", help="allow replacement of symlinked artifacts")
     tool_selection = restore.add_mutually_exclusive_group()
@@ -66,7 +67,7 @@ def parse_args(
     )
 
     status = subparsers.add_parser("status", help="compare tool artifacts with their exact backups")
-    status.add_argument("tool", nargs="?", default="all", choices=["all"] + list(tool_names))
+    status.add_argument("tool", nargs="?", default="all", choices=tool_choices)
 
     ui = subparsers.add_parser("ui", help="open the local browser interface")
     ui.add_argument("--bind", default="127.0.0.1", choices=["127.0.0.1", "localhost"])
@@ -108,7 +109,7 @@ def main(
 
     request = OperationRequest(
         action=args.action,
-        tool=getattr(args, "tool", "all"),
+        tool=args.tool,
         host=args.host,
         dry_run=getattr(args, "dry_run", False),
         prune=getattr(args, "prune", False),
