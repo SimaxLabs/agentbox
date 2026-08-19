@@ -1,0 +1,37 @@
+<div class="preview-card">
+  <div class="preview-header">
+    <div>
+      <p class="kicker">Dry run complete</p>
+      <h3>{{ operation_label }}</h3>
+    </div>
+    <span class="change-count"><strong>{{ changes }}</strong> proposed change{% if changes != 1 %}s{% endif %}</span>
+  </div>
+
+  {% if dangerous %}
+  <div class="warning-callout">
+    <strong>Review required.</strong>
+    {% if operation.prune %}Pruning can remove catalog entries. {% endif %}
+    {% if operation.force %}Symlink replacement is enabled. {% endif %}
+    {% if operation.action == "restore" %}Existing targets will receive timestamped safety copies before replacement.{% endif %}
+  </div>
+  {% endif %}
+
+  <div class="event-log preview-log">
+    {% if events %}
+      {% for event in events %}
+      <div class="log-line tone-{{ event.tone }}">
+        <span>{{ event.kind }}</span><code>{{ event.message }}</code>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="log-line tone-quiet"><span>no-op</span><code>No artifacts matched this operation.</code></div>
+    {% endif %}
+  </div>
+
+  <form method="post" action="/operations/execute" hx-post="/operations/execute" hx-target="#operation-panel" hx-swap="innerHTML" data-async-form class="confirm-row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="preview_token" value="{{ preview_token }}">
+    <p>The operation will be preflighted again against the current filesystem.</p>
+    <button type="submit" class="confirm-action">Confirm and execute</button>
+  </form>
+</div>

@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-kit-workbench"
+version = "0.2.0"
+description = "Back up and restore skills and commands across AI coding tools."
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = []
+
+[project.optional-dependencies]
+ui = [
+  "fastapi>=0.115,<1",
+  "jinja2>=3.1,<4",
+  "python-multipart>=0.0.9,<1",
+  "uvicorn>=0.30,<1",
+]
+desktop = [
+  "fastapi>=0.115,<1",
+  "jinja2>=3.1,<4",
+  "python-multipart>=0.0.9,<1",
+  "uvicorn>=0.30,<1",
+  "pywebview>=5.3,<7",
+]
+build = [
+  "fastapi>=0.115,<1",
+  "jinja2>=3.1,<4",
+  "python-multipart>=0.0.9,<1",
+  "uvicorn>=0.30,<1",
+  "pywebview>=5.3,<7",
+  "pyinstaller>=6.10,<7",
+]
+test = [
+  "fastapi>=0.115,<1",
+  "jinja2>=3.1,<4",
+  "python-multipart>=0.0.9,<1",
+  "uvicorn>=0.30,<1",
+  "httpx>=0.27,<1",
+]
+
+[project.scripts]
+ai-kit = "ai_kit.cli:entrypoint"
+ai-kit-ui = "ai_kit.web_cli:entrypoint"
+ai-kit-desktop = "ai_kit.desktop:entrypoint"
+
+[tool.setuptools]
+packages = ["ai_kit"]
+
+[tool.setuptools.package-data]
+ai_kit = [
+  "default_config.json",
+  "templates/*.html",
+  "templates/partials/*.html",
+  "static/*.css",
+  "static/*.js",
+  "static/vendor/*.js",
+  "static/vendor/*.md",
+  "static/vendor/*.txt",
+]

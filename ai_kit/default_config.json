@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "catalog": "~/.local/share/ai-kit/catalog",
+  "state_file": "~/.local/state/ai-kit/state.json",
+  "safety_backups": "~/.local/state/ai-kit/backups",
+  "tools": {
+    "claude": {
+      "skills": {
+        "sources": [{"id": "claude-skills", "path": "~/.claude/skills"}],
+        "target": "~/.claude/skills"
+      },
+      "commands": {
+        "sources": [{"id": "claude-commands", "path": "~/.claude/commands"}],
+        "target": "~/.claude/commands"
+      }
+    },
+    "codex": {
+      "skills": {
+        "sources": [
+          {"id": "agent-skills", "path": "~/.agents/skills"},
+          {"id": "legacy-codex-skills", "path": "~/.codex/skills"}
+        ],
+        "target": "~/.agents/skills"
+      },
+      "commands": {
+        "sources": [{"id": "legacy-codex-prompts", "path": "~/.codex/prompts"}],
+        "target": "~/.codex/prompts"
+      }
+    },
+    "opencode": {
+      "skills": {
+        "sources": [{"id": "opencode-skills", "path": "~/.config/opencode/skills"}],
+        "target": "~/.config/opencode/skills"
+      },
+      "commands": {
+        "sources": [{"id": "opencode-commands", "path": "~/.config/opencode/commands"}],
+        "target": "~/.config/opencode/commands"
+      }
+    }
+  }
+}

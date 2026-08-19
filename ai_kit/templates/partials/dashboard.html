@@ -1,0 +1,66 @@
+<div class="section-heading dashboard-heading">
+  <div>
+    <p class="kicker">Host status / {{ selected_host }}</p>
+    <h2>Working copies</h2>
+  </div>
+  <button class="text-action" type="button" hx-get="/dashboard?host={{ selected_host }}" hx-target="#dashboard-shell" hx-swap="innerHTML">Refresh status</button>
+</div>
+
+<div class="tool-grid">
+  {% for tool in tools %}
+  <article class="tool-card state-{{ tool.state }}">
+    <div class="tool-card-top">
+      <span class="tool-monogram">{{ tool.name[:2] | upper }}</span>
+      <span class="status-pill"><i></i>{{ tool.state_label }}</span>
+    </div>
+    <h3>{{ tool.name }}</h3>
+    <p class="artifact-count"><strong>{{ tool.artifact_count }}</strong> catalog artifact{% if tool.artifact_count != 1 %}s{% endif %}</p>
+    <div class="source-list">
+      {% for source in tool.sources %}
+      <div class="source-item">
+        <span class="source-light {% if source.available %}available{% endif %}"></span>
+        <span><strong>{{ source.id }}</strong><small>{{ source.kind }} / {{ source.path }}</small></span>
+      </div>
+      {% endfor %}
+    </div>
+    {% set notable = tool.events | rejectattr("kind", "in", ["clean", "skip-derived", "skip-duplicate"]) | list %}
+    {% if notable %}
+    <details class="tool-findings">
+      <summary>{{ notable | length }} status note{% if notable | length != 1 %}s{% endif %}</summary>
+      {% for event in notable %}<code>{{ event.message }}</code>{% endfor %}
+    </details>
+    {% endif %}
+  </article>
+  {% endfor %}
+</div>
+
+<section class="inventory">
+  <div class="inventory-header">
+    <div>
+      <p class="kicker">Catalog index</p>
+      <h2>Artifacts &amp; origins</h2>
+    </div>
+    <label class="search-box">
+      <span>Filter</span>
+      <input type="search" placeholder="name, tool, source" data-inventory-search>
+    </label>
+  </div>
+  {% if inventory %}
+  <div class="inventory-table" role="table">
+    <div class="inventory-row inventory-labels" role="row">
+      <span>Name</span><span>Kind</span><span>Tool</span><span>Origin</span>
+    </div>
+    {% for artifact in inventory %}
+    <div class="inventory-row" role="row" data-inventory-row data-search-value="{{ artifact.name }} {{ artifact.kind }} {{ artifact.tool }} {{ artifact.sources }}">
+      <strong>{{ artifact.name }}</strong>
+      <span><b class="kind-tag">{{ artifact.kind }}</b><small>{{ artifact.path }}</small></span>
+      <span>{{ artifact.tool }}</span>
+      <code>{{ artifact.sources }}</code>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="no-results" data-no-results hidden>No artifacts match this filter.</p>
+  {% else %}
+  <div class="inventory-empty">No catalog artifacts have been backed up for this host.</div>
+  {% endif %}
+</section>

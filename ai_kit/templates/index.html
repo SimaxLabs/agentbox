@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="htmx-config" content='{"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"409","swap":true},{"code":"422","swap":true},{"code":"[45]..","swap":false}]}' type="application/json">
+  <title>AI Kit Workbench</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/vendor/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="masthead">
+    <a class="brand" href="/?host={{ selected_host }}" aria-label="AI Kit dashboard">
+      <span class="brand-mark">AK</span>
+      <span>
+        <strong>AI Kit</strong>
+        <small>artifact workbench</small>
+      </span>
+    </a>
+    <div class="environment">
+      <div class="environment-item config-item">
+        <span class="eyebrow">Configuration</span>
+        <span class="path" title="{{ config_path }}">{{ config_path }}</span>
+      </div>
+      <form method="get" action="/" class="host-picker" data-host-picker>
+        <label for="host">Catalog host</label>
+        <select id="host" name="host">
+          {% for host in hosts %}
+          <option value="{{ host }}" {% if host == selected_host %}selected{% endif %}>{{ host }}</option>
+          {% endfor %}
+        </select>
+      </form>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <p class="kicker">Local control plane</p>
+        <h1>Move agent knowledge<br>without losing its lineage.</h1>
+      </div>
+      <p class="hero-copy">Inspect exact backups, preview every write, and restore portable skills across your coding tools. Nothing executes until its dry run is reviewed.</p>
+    </section>
+
+    <section id="dashboard-shell" class="dashboard-shell" aria-live="polite">
+      {% include "partials/dashboard.html" %}
+    </section>
+
+    <section class="workbench" id="workbench">
+      <div class="section-heading">
+        <div>
+          <p class="kicker">Operation builder</p>
+          <h2>Stage a change</h2>
+        </div>
+        <span class="safety-note">Dry run required</span>
+      </div>
+
+      <div class="operation-grid">
+        <form class="operation-card backup-card" method="post" action="/operations/preview" hx-post="/operations/preview" hx-target="#operation-panel" hx-swap="innerHTML" data-async-form>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="action" value="backup">
+          <input type="hidden" name="host" value="{{ selected_host }}">
+          <div class="operation-number">01</div>
+          <div class="operation-title">
+            <p class="eyebrow">Source to catalog</p>
+            <h3>Backup</h3>
+            <p>Capture exact files, modes, and source locations under this host.</p>
+          </div>
+          <label>
+            Target tool
+            <select name="tool">
+              <option value="all">All configured tools</option>
+              {% for tool in tool_names %}<option value="{{ tool }}">{{ tool }}</option>{% endfor %}
+            </select>
+          </label>
+          <label class="check-row">
+            <input type="checkbox" name="prune">
+            <span><strong>Prune absent entries</strong><small>Remove catalog entries absent from available sources.</small></span>
+          </label>
+          <label class="check-row">
+            <input type="checkbox" name="include_derived">
+            <span><strong>Include edited restores</strong><small>Back up modified derived copies as independent artifacts.</small></span>
+          </label>
+          <button type="submit" class="primary-action">Preview backup <span aria-hidden="true">-&gt;</span></button>
+        </form>
+
+        <form class="operation-card restore-card" method="post" action="/operations/preview" hx-post="/operations/preview" hx-target="#operation-panel" hx-swap="innerHTML" data-async-form data-restore-form>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="action" value="restore">
+          <input type="hidden" name="host" value="{{ selected_host }}">
+          <div class="operation-number">02</div>
+          <div class="operation-title">
+            <p class="eyebrow">Catalog to working copy</p>
+            <h3>Restore</h3>
+            <p>Deploy portable skills or exact originals with safety snapshots.</p>
+          </div>
+          <div class="field-pair">
+            <label>
+              Target tool
+              <select name="tool">
+                <option value="all">All configured tools</option>
+                {% for tool in tool_names %}<option value="{{ tool }}">{{ tool }}</option>{% endfor %}
+              </select>
+            </label>
+            <label>
+              Restore mode
+              <select name="restore_mode" data-restore-mode>
+                <option value="portable">Portable skills</option>
+                <option value="exact">Exact originals</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            Catalog source
+            <select name="source_mode" data-source-mode>
+              <option value="matching">Matching target tool</option>
+              <option value="all">Every tool catalog</option>
+              {% for tool in tool_names %}<option value="tool:{{ tool }}">Only {{ tool }}</option>{% endfor %}
+            </select>
+          </label>
+          <div class="check-grid">
+            <label class="check-row compact">
+              <input type="checkbox" name="all_hosts">
+              <span><strong>All hosts</strong><small>Read every host namespace.</small></span>
+            </label>
+            <label class="check-row compact">
+              <input type="checkbox" name="force">
+              <span><strong>Replace symlinks</strong><small>Allow explicitly unsafe targets.</small></span>
+            </label>
+          </div>
+          <button type="submit" class="primary-action">Preview restore <span aria-hidden="true">-&gt;</span></button>
+        </form>
+      </div>
+
+      <div id="operation-panel" class="operation-panel" aria-live="polite">
+        <div class="empty-panel">
+          <span class="empty-glyph">PREVIEW</span>
+          <p>Choose an operation. Its complete dry-run output will appear here before execution is enabled.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="paths-strip">
+      <div><span class="eyebrow">Catalog</span><code>{{ catalog_path }}</code></div>
+      <div><span class="eyebrow">Deployment state</span><code>{{ state_path }}</code></div>
+      <div><span class="eyebrow">Safety copies</span><code>{{ safety_path }}</code></div>
+    </section>
+  </main>
+
+  <footer>
+    <span>AI Kit runs entirely on this machine.</span>
+    <a href="#workbench">Stage operation</a>
+  </footer>
+</body>
+</html>

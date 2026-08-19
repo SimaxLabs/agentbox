@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -90,6 +91,9 @@ class AiKitTest(unittest.TestCase):
             "stdout:\n{}\nstderr:\n{}".format(result.stdout, result.stderr),
         )
         return result
+
+    def test_repository_launcher_is_executable(self):
+        self.assertTrue(os.access(CLI, os.X_OK))
 
     def add_skill(self, root_key, name, body="Follow the workflow."):
         directory = self.paths[root_key] / name

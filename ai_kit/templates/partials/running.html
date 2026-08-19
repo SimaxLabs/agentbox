@@ -1,0 +1,12 @@
+<div class="running-card" data-operation-job data-job-id="{{ job_id }}" data-csrf-token="{{ csrf_token }}" data-host="{{ selected_host }}">
+  <div class="running-header">
+    <div>
+      <p class="kicker">Live operation</p>
+      <h3>{{ operation_label }}</h3>
+    </div>
+    <span class="running-state"><i></i> Running</span>
+  </div>
+  <div class="event-log live-log" data-live-log>
+    <div class="log-line tone-quiet"><span>queued</span><code>Waiting for the filesystem operation lock...</code></div>
+  </div>
+</div>

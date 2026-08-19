@@ -7,7 +7,20 @@ The repository is the durable backup. Tool directories are working copies.
 ## Requirements
 
 - Python 3.8 or newer
-- No third-party packages
+- The CLI has no third-party runtime dependencies.
+- The browser and desktop interfaces use optional dependencies installed below.
+
+## Installation
+
+Create an isolated environment for the UI:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[desktop]'
+```
+
+Use `.[ui]` instead when only the browser interface is needed. The repository launcher continues to work without installation for CLI-only use.
 
 ## Quick Start
 
@@ -18,6 +31,74 @@ Preview and create an initial backup:
 ./ai-kit backup all
 git diff
 ```
+
+## User Interface
+
+### Native Desktop
+
+Install the desktop dependencies and open the pywebview application:
+
+```bash
+pip install -e '.[desktop]'
+./ai-kit desktop
+```
+
+The installed command is also available as `ai-kit-desktop`.
+
+The native window contains:
+
+- Per-tool backup status and source availability
+- Searchable catalog artifacts and recorded origins
+- Backup and restore operation builders
+- Portable and exact-original restore modes
+- Required dry-run previews
+- Explicit confirmation for writes, pruning, and forced symlink replacement
+- Live operation logs
+
+Closing the native window waits for an active filesystem operation to finish before stopping the local server.
+
+### Browser
+
+Run the same interface in the default browser:
+
+```bash
+pip install -e '.[ui]'
+./ai-kit ui
+```
+
+The standalone installed command is `ai-kit-ui`. Its default address is `http://127.0.0.1:8765`. Use a different local port with:
+
+```bash
+./ai-kit ui --port 9000
+```
+
+The server only accepts loopback binds. HTMX and all other application assets are bundled locally, so the interface does not require network access.
+
+### UI Safety
+
+Every write-capable UI operation follows this sequence:
+
+1. Run the core operation in dry-run mode.
+2. Display the complete structured operation log.
+3. Store a short-lived, single-use confirmation token and filesystem signature.
+4. On confirmation, repeat the preflight under the operation lock.
+5. Stop if any relevant source, target, catalog, configuration, or state content changed.
+6. Execute through the same atomic backup and restore functions used by the CLI.
+
+The local service uses a per-process CSRF token, trusted-host validation, serialized operations, and a cross-process lock on the selected configuration file.
+
+### Configuration Selection
+
+The repository launcher prefers the `ai-kit.json` beside the source checkout. Installed commands use `ai-kit.json` from the current directory when available, then fall back to the bundled configuration. The bundled configuration stores its catalog under `~/.local/share/ai-kit/catalog`.
+
+Select another file explicitly with the existing global option:
+
+```bash
+./ai-kit --config /path/to/ai-kit.json ui
+ai-kit-desktop --config /path/to/ai-kit.json
+```
+
+`AI_KIT_CONFIG` can also set the default configuration path for installed and packaged entry points.
 
 Restore this host's Codex artifacts to Codex as skills:
 
@@ -170,6 +251,8 @@ The paths and additional tools are configured in `ai-kit.json`. Every source has
 ./ai-kit [--host hostname] backup <all|tool> [--dry-run] [--prune] [--include-derived]
 ./ai-kit [--host hostname] restore <all|tool> [--dry-run] [--from tool | --all-tools] [--all-hosts] [--as-backed-up] [--force]
 ./ai-kit [--host hostname] status [all|tool]
+./ai-kit [--host hostname] ui [--port port] [--no-open]
+./ai-kit [--host hostname] desktop [--debug]
 ```
 
 When using a different configuration file, put the global option before the command:
@@ -180,6 +263,32 @@ When using a different configuration file, put the global option before the comm
 
 ## Tests
 
+Run the CLI suite without installing optional dependencies. UI tests are skipped when FastAPI is unavailable:
+
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+Install the test dependencies to run the complete suite:
+
+```bash
+pip install -e '.[test]'
+python3 -m unittest discover -s tests -v
+```
+
+## Desktop Package
+
+Build an unsigned, platform-specific desktop application with PyInstaller:
+
+```bash
+pip install -e '.[build]'
+pyinstaller --noconfirm ai-kit-desktop.spec
+```
+
+On macOS this produces `dist/AI Kit.app`. To launch the packaged application with a repository configuration:
+
+```bash
+open "dist/AI Kit.app" --args --config "/path/to/ai-kit.json"
+```
+
+The package includes the FastAPI templates, CSS, JavaScript, vendored HTMX, and fallback configuration. Distribution outside the local machine may additionally require platform signing and notarization.
