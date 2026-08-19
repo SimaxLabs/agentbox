@@ -30,6 +30,7 @@
 ## UI And Packaging
 
 - HTMX is vendored at `ai_kit/static/vendor/htmx.min.js`; the UI must remain usable offline and its CSP must not gain a remote script source.
+- `logo.png` is the source artwork; `ai_kit/static/logo.png` is the optimized web copy and `ai-kit.icns` is the generated macOS bundle icon. Regenerate both derivatives when the source changes.
 - New templates or static assets must be included in both `pyproject.toml` package data and `ai-kit-desktop.spec` PyInstaller data when existing directory globs do not cover them.
 - Desktop version metadata is duplicated in `pyproject.toml` and `ai-kit-desktop.spec`; update both together.
 - Build the native artifact with `pyinstaller --noconfirm ai-kit-desktop.spec`; macOS output is `dist/AI Kit.app`, which is ignored.

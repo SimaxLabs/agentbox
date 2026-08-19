@@ -58,6 +58,7 @@ contents = COLLECT(
 app = BUNDLE(
     contents,
     name="AI Kit.app",
+    icon=str(root / "ai-kit.icns"),
     version="0.2.0",
     bundle_identifier="dev.aikit.workbench",
     info_plist={

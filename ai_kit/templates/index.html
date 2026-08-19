@@ -4,8 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#162321">
   <meta name="htmx-config" content='{"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"409","swap":true},{"code":"422","swap":true},{"code":"[45]..","swap":false}]}' type="application/json">
   <title>AI Kit Workbench</title>
+  <link rel="icon" href="/static/logo.png" type="image/png">
+  <link rel="apple-touch-icon" href="/static/logo.png">
+  <link rel="manifest" href="/static/site.webmanifest">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/vendor/htmx.min.js" defer></script>
   <script src="/static/app.js" defer></script>
@@ -13,7 +17,7 @@
 <body>
   <header class="masthead">
     <a class="brand" href="/?host={{ selected_host }}" aria-label="AI Kit dashboard">
-      <span class="brand-mark">AK</span>
+      <span class="brand-mark"><img src="/static/logo.png" alt=""></span>
       <span>
         <strong>AI Kit</strong>
         <small>artifact workbench</small>
@@ -41,7 +45,10 @@
         <p class="kicker">Local control plane</p>
         <h1>Move agent knowledge<br>without losing its lineage.</h1>
       </div>
-      <p class="hero-copy">Inspect exact backups, preview every write, and restore portable skills across your coding tools. Nothing executes until its dry run is reviewed.</p>
+      <div class="hero-side">
+        <img class="hero-logo" src="/static/logo.png" alt="AI Kit backup toolkit">
+        <p class="hero-copy">Inspect exact backups, preview every write, and restore portable skills across your coding tools. Nothing executes until its dry run is reviewed.</p>
+      </div>
     </section>
 
     <section id="dashboard-shell" class="dashboard-shell" aria-live="polite">

@@ -84,6 +84,18 @@ class AiKitWebTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("default-src 'self'", response.headers["content-security-policy"])
         self.assertEqual("no-store", response.headers["cache-control"])
 
+    async def test_brand_assets_are_served_locally(self):
+        page = await self.client.get("/")
+        logo = await self.client.get("/static/logo.png")
+        manifest = await self.client.get("/static/site.webmanifest")
+
+        self.assertIn('href="/static/logo.png"', page.text)
+        self.assertEqual(200, logo.status_code)
+        self.assertEqual("image/png", logo.headers["content-type"])
+        self.assertTrue(logo.content.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(200, manifest.status_code)
+        self.assertEqual("/static/logo.png", manifest.json()["icons"][0]["src"])
+
     async def test_preview_does_not_write_and_confirmed_job_streams_events(self):
         self.add_command()
 

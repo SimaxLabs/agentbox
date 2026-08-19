@@ -59,6 +59,8 @@ ai_kit = [
   "templates/partials/*.html",
   "static/*.css",
   "static/*.js",
+  "static/*.png",
+  "static/*.webmanifest",
   "static/vendor/*.js",
   "static/vendor/*.md",
   "static/vendor/*.txt",
