@@ -25,8 +25,14 @@ class AgentBoxWebTest(unittest.IsolatedAsyncioTestCase):
             os.environ,
             {
                 "HOME": str(self.root / "home"),
+                "USERPROFILE": str(self.root / "home"),
+                "APPDATA": str(self.root / "appdata"),
+                "LOCALAPPDATA": str(self.root / "local-appdata"),
+                "XDG_CONFIG_HOME": str(self.root / "home/.config"),
                 "XDG_DATA_HOME": str(self.root / "data"),
                 "XDG_STATE_HOME": str(self.root / "state-root"),
+                "AGENTBOX_CONFIG": "",
+                "AGENTBOX_HOST": "",
             },
         )
         environment.start()

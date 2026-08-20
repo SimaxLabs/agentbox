@@ -25,6 +25,7 @@ from .core import (
     OperationRequest,
     catalog_hosts,
     default_local_catalog,
+    external_program_environment,
     git_storage_revision,
     load_config,
     load_manifest,
@@ -773,7 +774,18 @@ def run_browser(
     app = create_app(config_path, host_override)
     url = "http://{}:{}/".format(bind, port)
     if open_browser:
-        timer = threading.Timer(0.6, lambda: webbrowser.open(url))
+        def open_system_browser() -> None:
+            with external_program_environment() as environment:
+                original_environment = os.environ.copy()
+                try:
+                    os.environ.clear()
+                    os.environ.update(environment)
+                    webbrowser.open(url)
+                finally:
+                    os.environ.clear()
+                    os.environ.update(original_environment)
+
+        timer = threading.Timer(0.6, open_system_browser)
         timer.daemon = True
         timer.start()
     try:

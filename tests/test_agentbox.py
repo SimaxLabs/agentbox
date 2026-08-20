@@ -13,6 +13,7 @@ from agentbox.core import (
     AgentBoxError,
     OperationRequest,
     default_local_catalog,
+    external_program_environment,
     load_config,
     provider_detection,
     run_operation,
@@ -45,8 +46,22 @@ class AgentBoxTest(unittest.TestCase):
         self.safety = self.root / "state/backups"
         self.config = self.root / "agentbox.json"
         self.environment = os.environ.copy()
-        self.environment["XDG_DATA_HOME"] = str(self.root / "data")
-        self.environment["HOME"] = str(self.root / "home")
+        self.environment.update(
+            {
+                "AGENTBOX_CONFIG": "",
+                "AGENTBOX_HOST": "",
+                "APPDATA": str(self.root / "appdata"),
+                "HOME": str(self.root / "home"),
+                "LOCALAPPDATA": str(self.root / "local-appdata"),
+                "USERPROFILE": str(self.root / "home"),
+                "XDG_CONFIG_HOME": str(self.root / "home/.config"),
+                "XDG_DATA_HOME": str(self.root / "data"),
+                "XDG_STATE_HOME": str(self.root / "state-root"),
+            }
+        )
+        environment = patch.dict(os.environ, self.environment)
+        environment.start()
+        self.addCleanup(environment.stop)
         self.config.write_text(
             json.dumps(
                 {
@@ -100,6 +115,25 @@ class AgentBoxTest(unittest.TestCase):
             "stdout:\n{}\nstderr:\n{}".format(result.stdout, result.stderr),
         )
         return result
+
+    def test_frozen_external_program_environment_restores_search_paths(self):
+        bundle = self.root / "bundle"
+        system_bin = self.root / "system-bin"
+        frozen_environment = {
+            "PATH": os.pathsep.join((str(bundle), str(system_bin))),
+            "LD_LIBRARY_PATH": str(bundle),
+            "LD_LIBRARY_PATH_ORIG": "/system/lib",
+        }
+
+        with (
+            patch.object(sys, "frozen", True, create=True),
+            patch.object(sys, "_MEIPASS", str(bundle), create=True),
+            patch.dict(os.environ, frozen_environment, clear=True),
+            patch("agentbox.core.sys.platform", "linux"),
+            external_program_environment() as environment,
+        ):
+            self.assertEqual(str(system_bin), environment["PATH"])
+            self.assertEqual("/system/lib", environment["LD_LIBRARY_PATH"])
 
     def set_storage(self, storage):
         config = json.loads(self.config.read_text(encoding="utf-8"))

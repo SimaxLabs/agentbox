@@ -1,0 +1,171 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "agentbox/**"
+      - "scripts/**"
+      - "agentbox.spec"
+      - "pyproject.toml"
+      - "tests/**"
+      - "README.md"
+      - "LICENSE"
+      - "logo.png"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test release source
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: python -m pip install -e '.[test]'
+      - run: python -m unittest discover -s tests -v
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: macos-arm64
+            machine: arm64
+            executable: dist/agentbox
+            archive: tar
+          - runner: ubuntu-22.04
+            target: linux-x86_64
+            machine: x86_64
+            executable: dist/agentbox
+            archive: tar
+          - runner: ubuntu-22.04-arm
+            target: linux-arm64
+            machine: aarch64
+            executable: dist/agentbox
+            archive: tar
+          - runner: windows-2025
+            target: windows-x86_64
+            machine: AMD64
+            executable: dist/agentbox.exe
+            archive: zip
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Verify runner architecture
+        env:
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+        run: python -c "import os, platform; actual = platform.machine(); expected = os.environ['EXPECTED_MACHINE']; assert actual.lower() == expected.lower(), f'expected {expected}, found {actual}'"
+      - run: python -m pip install -e '.[test,release]'
+      - if: runner.os != 'Windows'
+        run: python -m unittest discover -s tests -v
+      - run: python -m PyInstaller --noconfirm --clean agentbox.spec
+      - run: python scripts/smoke_standalone.py "${{ matrix.executable }}"
+      - name: Package Unix executable
+        if: matrix.archive == 'tar'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          package="agentbox-latest-${TARGET}"
+          mkdir -p "package/${package}" release
+          cp dist/agentbox README.md LICENSE logo.png "package/${package}/"
+          printf '%s\n' "$GITHUB_SHA" > "package/${package}/SOURCE_COMMIT"
+          python -c 'import platform, sys; print(sys.version); print(platform.platform()); print(platform.machine())' > "package/${package}/BUILD_ENVIRONMENT.txt"
+          git archive --format=zip --prefix=agentbox-source/ --output="package/${package}/agentbox-source.zip" "$GITHUB_SHA"
+          python scripts/bundle_source_metadata.py "package/${package}"
+          python scripts/bundle_native_metadata.py build/agentbox/Analysis-00.toc "package/${package}"
+          chmod 755 "package/${package}/agentbox"
+          tar -czf "release/${package}.tar.gz" -C package "${package}"
+      - name: Package Windows executable
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          $package = "agentbox-latest-$env:TARGET"
+          New-Item -ItemType Directory -Force -Path "package/$package", "release" | Out-Null
+          Copy-Item "dist/agentbox.exe", "README.md", "LICENSE", "logo.png" -Destination "package/$package"
+          Set-Content -Path "package/$package/SOURCE_COMMIT" -Value $env:GITHUB_SHA
+          python -c "import platform, sys; print(sys.version); print(platform.platform()); print(platform.machine())" | Set-Content "package/$package/BUILD_ENVIRONMENT.txt"
+          git archive --format=zip --prefix=agentbox-source/ --output="package/$package/agentbox-source.zip" $env:GITHUB_SHA
+          python scripts/bundle_source_metadata.py "package/$package"
+          python scripts/bundle_native_metadata.py build/agentbox/Analysis-00.toc "package/$package"
+          Compress-Archive -Path "package/$package" -DestinationPath "release/$package.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: agentbox-${{ matrix.target }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish rolling release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: agentbox-rolling-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: release
+          merge-multiple: true
+      - name: Create checksums
+        working-directory: release
+        run: sha256sum agentbox-* > SHA256SUMS.txt
+      - name: Replace rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          main_sha=$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+          if [[ "$GITHUB_SHA" != "$main_sha" ]]; then
+            echo "Skipping superseded commit $GITHUB_SHA; main is now $main_sha"
+            exit 0
+          fi
+          short_sha=${GITHUB_SHA::12}
+          release_tag="agentbox-latest-${GITHUB_SHA}"
+          notes="Automated native builds from main commit $short_sha. Every artifact passed its platform smoke test before publication. The exact AgentBox source commit and resolved build dependency manifest are bundled in every archive."
+          release_state="missing"
+          if gh release view "$release_tag" > /dev/null 2>&1; then
+            release_state=$(gh release view "$release_tag" --json isDraft --jq 'if .isDraft then "draft" else "published" end')
+          fi
+          if [[ "$release_state" == "draft" ]]; then
+            gh release delete "$release_tag" --cleanup-tag --yes
+            release_state="missing"
+          fi
+          if [[ "$release_state" == "missing" ]]; then
+            gh release create "$release_tag" release/* \
+              --target "$GITHUB_SHA" \
+              --title "AgentBox latest" \
+              --notes "$notes" \
+              --latest
+          else
+            echo "Release $release_tag is already published; leaving its assets unchanged"
+          fi
+          while IFS= read -r old_tag; do
+            if [[ "$old_tag" != "$release_tag" ]]; then
+              gh release delete "$old_tag" --cleanup-tag --yes
+            fi
+          done < <(
+            gh api --paginate "/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | select(.tag_name | startswith("agentbox-latest-")) | .tag_name'
+          )

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,8 @@ name = "agentbox-workbench"
 version = "0.2.0"
 description = "A local-first catalog for backing up and restoring AI coding-agent resources."
 readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = ">=3.14"
 dependencies = [
   "fastapi>=0.115,<1",
@@ -22,6 +24,9 @@ classifiers = [
 [project.optional-dependencies]
 test = [
   "httpx>=0.27,<1",
+]
+release = [
+  "pyinstaller==6.22.2",
 ]
 
 [project.scripts]

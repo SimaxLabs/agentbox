@@ -564,9 +564,73 @@ def redacted_git_url(url: str) -> str:
     return re.sub(r"(?<=://)([^/:@]+):[^/@]+@", r"\1:<credentials>@", url)
 
 
+def _outside_frozen_bundle(value: str, bundle_root: Path) -> bool:
+    if not value:
+        return False
+    try:
+        return not Path(value).resolve().is_relative_to(bundle_root)
+    except OSError:
+        return True
+
+
+@contextmanager
+def external_program_environment():
+    """Yield an environment safe for system programs launched by PyInstaller."""
+    environment = os.environ.copy()
+    if not getattr(sys, "frozen", False):
+        yield environment
+        return
+
+    bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)).resolve()
+    for variable in ("PATH", "DYLD_LIBRARY_PATH"):
+        if variable in environment:
+            environment[variable] = os.pathsep.join(
+                part
+                for part in environment[variable].split(os.pathsep)
+                if _outside_frozen_bundle(part, bundle_root)
+            )
+    for variable in ("LD_LIBRARY_PATH", "LIBPATH"):
+        original = environment.get(f"{variable}_ORIG")
+        if original is None:
+            environment.pop(variable, None)
+        else:
+            environment[variable] = original
+
+    set_dll_directory = None
+    if sys.platform == "win32":  # pragma: no cover - exercised by release smoke tests.
+        import ctypes
+
+        set_dll_directory = ctypes.windll.kernel32.SetDllDirectoryW
+        set_dll_directory.argtypes = [ctypes.c_wchar_p]
+        set_dll_directory.restype = ctypes.c_bool
+        set_dll_directory(None)
+    try:
+        yield environment
+    finally:
+        if set_dll_directory is not None:
+            set_dll_directory(str(bundle_root))
+
+
 def _git_error_output(result: subprocess.CompletedProcess[str], url: str) -> str:
     output = (result.stderr or result.stdout or "Git command failed").strip()
     return output.replace(url, "<repository>")[:2000]
+
+
+def _external_executable(name: str, environment: dict[str, str]) -> str | None:
+    suffixes = [""]
+    if sys.platform == "win32":  # pragma: no cover - exercised by release smoke tests.
+        suffixes.extend(environment.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep))
+    for value in environment.get("PATH", os.defpath).split(os.pathsep):
+        if not value:
+            continue
+        directory = Path(value.strip('"')).expanduser()
+        if not directory.is_absolute():
+            continue
+        for suffix in suffixes:
+            candidate = directory / f"{name}{suffix.lower()}"
+            if candidate.is_file() and (sys.platform == "win32" or os.access(candidate, os.X_OK)):
+                return str(candidate.resolve())
+    return None
 
 
 def _run_git(
@@ -575,28 +639,31 @@ def _run_git(
     url: str,
     allowed: tuple[int, ...] = (0,),
 ) -> subprocess.CompletedProcess[str]:
-    command = ["git"]
-    if checkout is not None:
-        command.extend(("-C", str(checkout)))
-    command.extend(arguments)
-    environment = os.environ.copy()
-    environment["GIT_TERMINAL_PROMPT"] = "0"
-    environment["GIT_ATTR_NOSYSTEM"] = "1"
-    environment["GIT_CONFIG_COUNT"] = "2"
-    environment["GIT_CONFIG_KEY_0"] = "core.autocrlf"
-    environment["GIT_CONFIG_VALUE_0"] = "false"
-    environment["GIT_CONFIG_KEY_1"] = "core.attributesFile"
-    environment["GIT_CONFIG_VALUE_1"] = os.devnull
-    environment["LC_ALL"] = "C"
     try:
-        result = subprocess.run(
-            command,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=GIT_TIMEOUT_SECONDS,
-            env=environment,
-        )
+        with external_program_environment() as environment:
+            git_executable = _external_executable("git", environment)
+            if git_executable is None:
+                raise FileNotFoundError
+            command = [git_executable]
+            if checkout is not None:
+                command.extend(("-C", str(checkout)))
+            command.extend(arguments)
+            environment["GIT_TERMINAL_PROMPT"] = "0"
+            environment["GIT_ATTR_NOSYSTEM"] = "1"
+            environment["GIT_CONFIG_COUNT"] = "2"
+            environment["GIT_CONFIG_KEY_0"] = "core.autocrlf"
+            environment["GIT_CONFIG_VALUE_0"] = "false"
+            environment["GIT_CONFIG_KEY_1"] = "core.attributesFile"
+            environment["GIT_CONFIG_VALUE_1"] = os.devnull
+            environment["LC_ALL"] = "C"
+            result = subprocess.run(
+                command,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=GIT_TIMEOUT_SECONDS,
+                env=environment,
+            )
     except FileNotFoundError:
         raise AgentBoxError("Git storage requires the git executable") from None
     except subprocess.TimeoutExpired:

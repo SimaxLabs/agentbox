@@ -12,7 +12,7 @@ It gives Claude Code, Codex, and OpenCode one deliberate backup and restore work
 
 ### Exact on the way in
 
-AgentBox preserves artifact bytes, supporting files, executable modes, relative source locations, and stable source IDs. Backup does not convert commands or rewrite skills.
+AgentBox preserves artifact bytes, supporting files, POSIX executable modes when the filesystem exposes them, relative source locations, and stable source IDs. Backup does not convert commands or rewrite skills.
 
 ### Portable on the way out
 
@@ -70,10 +70,35 @@ AgentBox treats configuration movement as a filesystem operation, not a convenie
 
 ## Requirements
 
-- Python 3.14 or newer
+- Standalone release: no Python installation required
+- Source or Python package installation: Python 3.14 or newer
 - Git only when managed Git storage is enabled
 
-## Installation
+## GitHub Releases
+
+Every successful push to `main` replaces one rolling `latest` GitHub Release. Publication occurs only after every native build passes its platform smoke test:
+
+| Archive | Platform |
+| --- | --- |
+| `agentbox-latest-macos-arm64.tar.gz` | Apple Silicon macOS |
+| `agentbox-latest-linux-x86_64.tar.gz` | x86-64 Linux |
+| `agentbox-latest-linux-arm64.tar.gz` | ARM64 Linux |
+| `agentbox-latest-windows-x86_64.zip` | 64-bit Windows |
+
+Download and extract the archive for your machine, then put `agentbox` or `agentbox.exe` somewhere on `PATH`. The standalone executable includes the CLI, browser UI, templates, and static assets:
+
+```bash
+agentbox --help
+agentbox ui
+```
+
+The release also includes `SHA256SUMS.txt`. Every native archive contains `SOURCE_COMMIT`, the exact AgentBox source tree in `agentbox-source.zip`, the resolved `DEPENDENCIES.txt`, `SOURCE_MANIFEST.json`, a hashed native-library inventory in `NATIVE_COMPONENTS.json`, all discovered license notices, and `BUILD_ENVIRONMENT.txt`. Source manifests include durable upstream locations and available SHA-256 digests. Unknown native dependencies stop the release instead of shipping without provenance.
+
+Linux binaries require glibc 2.35 or newer, matching Ubuntu 22.04 and newer. Other distributions can use the Python installation when their libc is older.
+
+The current macOS and Windows builds are unsigned. Those operating systems may display an unidentified-developer warning until signing certificates are configured.
+
+## Install from Source
 
 ```bash
 python3 -m venv .venv
@@ -250,6 +275,26 @@ Run the complete suite:
 pip install -e '.[test]'
 python3 -m unittest discover -s tests -v
 ```
+
+Build and smoke-test a standalone executable:
+
+```bash
+pip install -e '.[release]'
+python3 -m PyInstaller --noconfirm --clean agentbox.spec
+python3 scripts/smoke_standalone.py dist/agentbox
+```
+
+## Rolling Releases
+
+Push release-ready source to `main`. No version bump or manual tag is required.
+
+The `Release` workflow tests the source, builds all four native archives, executes each native binary, generates checksums, and publishes a commit-addressed release marked as GitHub's Latest. Only after the new release is public does it remove older rolling releases. Pull requests and manual workflow runs build and validate artifacts without replacing the public release.
+
+No manual version bump or release tag is needed. Internal release tags use the full `agentbox-latest-<commit>` identifier and are managed by the workflow.
+
+## License
+
+AgentBox is licensed under the GNU General Public License v3.0 only (`GPL-3.0-only`). See `LICENSE`.
 
 Verify packaging:
 
