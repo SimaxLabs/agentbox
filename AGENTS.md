@@ -30,6 +30,9 @@
 ## UI And Packaging
 
 - HTMX is vendored at `agentbox/static/vendor/htmx.min.js`; the UI must remain usable offline and its CSP must not gain a remote script source.
+- Provider cards and individual provider selectors show only providers detected from their known filesystem markers. This is presentation filtering only; configured core operations retain their existing semantics.
+- Provider logos are local SVG assets under `agentbox/static/`. Do not replace them with remote images, icon services, or other network dependencies.
+- The current-version update result uses an HTMX out-of-band swap into `#footer-version`; actionable update, stale, disabled, and error notices remain in the top awareness area.
 - `logo.png` is the source artwork; `agentbox/static/logo.png` is the optimized web copy. Regenerate it when the source changes.
 - New templates or static assets must be included in `pyproject.toml` package data when existing directory globs do not cover them.
 - For packaging changes, verify `python3 -m pip wheel . --no-deps --wheel-dir <temporary-directory>` in addition to the tests.
