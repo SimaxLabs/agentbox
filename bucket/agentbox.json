@@ -1,0 +1,19 @@
+{
+  "version": "0.1.2",
+  "description": "Back up and restore AI coding-agent resources.",
+  "homepage": "https://github.com/SimaxLabs/agentbox",
+  "license": "GPL-3.0-only",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/SimaxLabs/agentbox/releases/download/v0.1.2/agentbox-0.1.2-windows-x86_64.zip",
+      "hash": "12fefeba9fee2c4d2d072313b36ba02e3590cb28995158230ce7f851fb336a6c",
+      "extract_dir": "agentbox-0.1.2-windows-x86_64"
+    }
+  },
+  "bin": [
+    [
+      "agentbox-scoop.cmd",
+      "agentbox"
+    ]
+  ]
+}
