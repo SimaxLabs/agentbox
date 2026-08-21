@@ -2276,6 +2276,35 @@ def operation_guard(config_path: Path, *storage_identities: Path):
         yield
 
 
+def application_lock_identity() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve()
+    return user_state_root() / "application-operation"
+
+
+@contextmanager
+def application_operation_guard(*identities: Path):
+    """Serialize operations with application replacement and reject pending updates."""
+    with operation_guard(application_lock_identity(), *identities):
+        if os.name == "nt" and getattr(sys, "frozen", False):
+            executable = Path(sys.executable).resolve()
+            marker = executable.with_name(".{}.update-pending".format(executable.name))
+            if marker.exists():
+                try:
+                    marker_age = time.time() - marker.lstat().st_mtime
+                    if marker_age > 60 * 60:
+                        marker.unlink()
+                except OSError as exc:
+                    raise AgentBoxError(
+                        "Cannot inspect the pending AgentBox update: {}".format(exc)
+                    )
+            if marker.exists():
+                raise AgentBoxError(
+                    "An AgentBox update is pending; close this process and try again after it finishes"
+                )
+        yield
+
+
 def _run_catalog_operation(
     config: dict,
     request: OperationRequest,
@@ -2599,7 +2628,7 @@ def run_operation(
     config_path = config_path.expanduser().resolve()
     if request.action == "providers":
         if acquire_lock:
-            with operation_guard(config_path):
+            with application_operation_guard(config_path):
                 return run_operation(
                     config_path,
                     request,
@@ -2612,7 +2641,7 @@ def run_operation(
     if acquire_lock:
         preliminary = load_config(config_path, request.host)
         locked_identities = storage_lock_identities(preliminary)
-        with operation_guard(config_path, *locked_identities):
+        with application_operation_guard(config_path, *locked_identities):
             current = load_config(config_path, request.host)
             if {
                 item.expanduser().resolve() for item in storage_lock_identities(current)

@@ -8,6 +8,7 @@ import secrets
 import threading
 import time
 import webbrowser
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -23,19 +24,20 @@ from .core import (
     AgentBoxError,
     OperationEvent,
     OperationRequest,
+    application_operation_guard,
     catalog_hosts,
     default_local_catalog,
     external_program_environment,
     git_storage_revision,
     load_config,
     load_manifest,
-    operation_guard,
     provider_detection,
     redacted_git_url,
     run_operation,
     storage_lock_identities,
     storage_roots,
 )
+from .update import UpdatePlan, check_for_updates, install_update, prepare_update_plan
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -48,6 +50,12 @@ class StoredPreview:
     request: OperationRequest
     created_at: float
     plan: str
+
+
+@dataclass
+class StoredUpdatePreview:
+    plan: UpdatePlan
+    created_at: float
 
 
 @dataclass
@@ -179,9 +187,11 @@ class WebRuntime:
         self.host_override = host_override
         self.csrf_token = secrets.token_urlsafe(32)
         self.previews: dict[str, StoredPreview] = {}
+        self.update_previews: dict[str, StoredUpdatePreview] = {}
         self.jobs: dict[str, OperationJob] = {}
         self.state_lock = threading.Lock()
         self.operation_lock = threading.Lock()
+        self.shutdown_callback: Callable[[], None] | None = None
 
     def available_hosts(self) -> tuple[dict, list[str]]:
         config = load_config(self.config_path, self.host_override)
@@ -192,12 +202,12 @@ class WebRuntime:
     @contextmanager
     def operation_guard(self, host: str | None = None):
         if not self.config_path.exists():
-            with operation_guard(self.config_path):
+            with application_operation_guard(self.config_path):
                 yield
             return
         config = load_config(self.config_path, host or self.host_override)
         locked_identities = storage_lock_identities(config)
-        with operation_guard(self.config_path, *locked_identities):
+        with application_operation_guard(self.config_path, *locked_identities):
             current = load_config(self.config_path, host or self.host_override)
             if {
                 item.expanduser().resolve() for item in storage_lock_identities(current)
@@ -285,6 +295,38 @@ class WebRuntime:
         if preview is None or time.monotonic() - preview.created_at > PREVIEW_TTL_SECONDS:
             raise AgentBoxError("This preview expired or was already used; preview the operation again")
         return preview
+
+    def store_update_preview(self, plan: UpdatePlan) -> str:
+        token = secrets.token_urlsafe(24)
+        now = time.monotonic()
+        with self.state_lock:
+            self.update_previews = {
+                key: value
+                for key, value in self.update_previews.items()
+                if now - value.created_at <= PREVIEW_TTL_SECONDS
+            }
+            self.update_previews[token] = StoredUpdatePreview(plan, now)
+        return token
+
+    def consume_update_preview(self, token: str) -> UpdatePlan:
+        with self.state_lock:
+            preview = self.update_previews.pop(token, None)
+        if preview is None or time.monotonic() - preview.created_at > PREVIEW_TTL_SECONDS:
+            raise AgentBoxError(
+                "This update review expired or was already used; review the update again"
+            )
+        return preview.plan
+
+    def install_reviewed_update(self, plan: UpdatePlan):
+        with self.operation_lock:
+            return install_update(plan)
+
+    def request_shutdown(self) -> None:
+        if self.shutdown_callback is None:
+            return
+        timer = threading.Timer(0.8, self.shutdown_callback)
+        timer.daemon = True
+        timer.start()
 
     def start_job(self, preview: StoredPreview) -> OperationJob:
         with self.state_lock:
@@ -657,6 +699,66 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
             request=request, name="partials/dashboard.html", context=context
         )
 
+    @app.get("/updates/status", response_class=HTMLResponse)
+    async def update_status(request: Request):
+        status = await run_in_threadpool(check_for_updates)
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/update_status.html",
+            context={
+                "request": request,
+                "csrf_token": runtime.csrf_token,
+                "update_status": status,
+            },
+        )
+
+    @app.post("/updates/preview", response_class=HTMLResponse)
+    async def preview_update(request: Request):
+        form = await request.form()
+        checked_csrf(runtime, form.get("csrf_token"))
+        try:
+            plan = await run_in_threadpool(prepare_update_plan)
+            token = runtime.store_update_preview(plan)
+            return templates.TemplateResponse(
+                request=request,
+                name="partials/update_preview.html",
+                context={
+                    "request": request,
+                    "csrf_token": runtime.csrf_token,
+                    "preview_token": token,
+                    "update_plan": plan,
+                },
+            )
+        except AgentBoxError as exc:
+            return templates.TemplateResponse(
+                request=request,
+                name="partials/update_error.html",
+                context={"request": request, "error": str(exc)},
+                status_code=422,
+            )
+
+    @app.post("/updates/execute", response_class=HTMLResponse)
+    async def execute_update(request: Request):
+        form = await request.form()
+        checked_csrf(runtime, form.get("csrf_token"))
+        try:
+            plan = runtime.consume_update_preview(str(form.get("preview_token", "")))
+            result = await run_in_threadpool(runtime.install_reviewed_update, plan)
+            if result.restart_required:
+                runtime.request_shutdown()
+            return templates.TemplateResponse(
+                request=request,
+                name="partials/update_complete.html",
+                context={"request": request, "result": result},
+            )
+        except AgentBoxError as exc:
+            return templates.TemplateResponse(
+                request=request,
+                name="partials/update_error.html",
+                context={"request": request, "error": str(exc)},
+                status_code=409,
+            )
+
     @app.post("/operations/preview", response_class=HTMLResponse)
     async def preview_operation(request: Request):
         form = await request.form()
@@ -788,8 +890,12 @@ def run_browser(
         timer = threading.Timer(0.6, open_system_browser)
         timer.daemon = True
         timer.start()
+    server = uvicorn.Server(
+        uvicorn.Config(app, host=bind, port=port, log_level="warning")
+    )
+    app.state.runtime.shutdown_callback = lambda: setattr(server, "should_exit", True)
     try:
-        uvicorn.run(app, host=bind, port=port, log_level="warning")
+        server.run()
     finally:
         app.state.runtime.wait_for_jobs()
     return 0

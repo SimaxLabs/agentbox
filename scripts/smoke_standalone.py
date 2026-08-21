@@ -66,10 +66,27 @@ def stop_process_tree(process: subprocess.Popen[str]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("executable", type=Path)
+    parser.add_argument("--expected-version", required=True)
+    parser.add_argument("--expected-commit", required=True)
     args = parser.parse_args()
     executable = args.executable.resolve()
 
-    subprocess.run([str(executable), "--help"], check=True, capture_output=True, timeout=60)
+    version = subprocess.run(
+        [str(executable), "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if (
+        "AgentBox v{}".format(args.expected_version) not in version.stdout
+        or args.expected_commit not in version.stdout
+    ):
+        raise RuntimeError(
+            "Frozen build identity did not contain expected version {} and commit {}: {}".format(
+                args.expected_version, args.expected_commit, version.stdout.strip()
+            )
+        )
 
     with tempfile.TemporaryDirectory(prefix="agentbox-release-smoke-") as temporary:
         root = Path(temporary)
@@ -111,6 +128,7 @@ def main() -> int:
             {
                 "AGENTBOX_CONFIG": str(config),
                 "AGENTBOX_HOST": "",
+                "AGENTBOX_NO_UPDATE_CHECK": "1",
                 "HOME": str(root),
                 "USERPROFILE": str(root),
                 "APPDATA": str(root / "appdata"),
@@ -132,6 +150,21 @@ def main() -> int:
             raise RuntimeError(
                 "Frozen Git smoke test failed:\n{}\n{}".format(
                     preview.stdout, preview.stderr
+                )
+            )
+
+        help_result = subprocess.run(
+            [str(executable), "--help"],
+            cwd=root,
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+        if help_result.returncode != 0 or "update" not in help_result.stdout:
+            raise RuntimeError(
+                "Frozen update command smoke test failed:\n{}\n{}".format(
+                    help_result.stdout, help_result.stderr
                 )
             )
 
@@ -173,6 +206,7 @@ def main() -> int:
                     htmx = read_url(f"http://127.0.0.1:{port}/static/vendor/htmx.min.js")
                     manifest = read_url(f"http://127.0.0.1:{port}/static/site.webmanifest")
                     logo = read_url(f"http://127.0.0.1:{port}/static/logo.png")
+                    update_status = read_url(f"http://127.0.0.1:{port}/updates/status")
                 except (OSError, RuntimeError, URLError):
                     time.sleep(0.25)
                     continue
@@ -183,6 +217,7 @@ def main() -> int:
                     or not htmx
                     or b"AgentBox" not in manifest
                     or not logo.startswith(b"\x89PNG")
+                    or b"Update checks disabled" not in update_status
                 ):
                     raise RuntimeError("Bundled UI assets did not contain the expected content")
                 csrf = re.search(rb'name="csrf_token" value="([^"]+)"', page)

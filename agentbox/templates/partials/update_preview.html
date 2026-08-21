@@ -1,0 +1,13 @@
+<div class="update-review">
+  <div>
+    <p class="eyebrow">Update ready for review</p>
+    <h2>Replace AgentBox v{{ update_plan.current_version }} with v{{ update_plan.latest_version }}?</h2>
+    <p>Commit <code>{{ update_plan.current_commit[:12] }}</code> will be replaced by <code>{{ update_plan.latest_commit[:12] }}</code>.</p>
+    <p>The native archive <code>{{ update_plan.archive_name }}</code> will be downloaded, verified against its published SHA-256 checksum, and inspected for the expected executable only.</p>
+  </div>
+  <form method="post" action="/updates/execute" hx-post="/updates/execute" hx-target="#update-awareness" hx-swap="innerHTML" data-async-form data-target="#update-awareness">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="preview_token" value="{{ preview_token }}">
+    <button type="submit" class="update-action confirm">Verify and install</button>
+  </form>
+</div>

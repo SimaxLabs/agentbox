@@ -7,6 +7,8 @@ on:
   pull_request:
     paths:
       - ".github/workflows/release.yml"
+      - "Formula/**"
+      - "bucket/**"
       - "agentbox/**"
       - "scripts/**"
       - "agentbox.spec"
@@ -21,12 +23,46 @@ permissions:
   contents: read
 
 jobs:
+  release-metadata:
+    name: Resolve release metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      release: ${{ steps.version.outputs.release }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - id: version
+        name: Read explicit release marker
+        shell: bash
+        run: |
+          project_version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          release=false
+          version=$project_version
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            requested=$(git show -s --format=%B "$GITHUB_SHA" | python scripts/release_version.py)
+            if [[ -n "$requested" ]]; then
+              release=true
+              version=$requested
+            fi
+          fi
+          {
+            echo "release=$release"
+            echo "version=$version"
+            echo "tag=v$version"
+          } >> "$GITHUB_OUTPUT"
+          if [[ "$release" == "true" ]]; then
+            echo "Release v$version requested by the HEAD commit"
+          else
+            echo "No release marker on this event; publication is disabled"
+          fi
+
   test:
     name: Test release source
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.14"
           cache: pip
@@ -35,7 +71,10 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }}
-    needs: test
+    if: github.event_name != 'push' || needs.release-metadata.outputs.release == 'true'
+    needs:
+      - release-metadata
+      - test
     strategy:
       fail-fast: false
       matrix:
@@ -62,8 +101,8 @@ jobs:
             archive: zip
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.14"
           cache: pip
@@ -74,16 +113,27 @@ jobs:
       - run: python -m pip install -e '.[test,release]'
       - if: runner.os != 'Windows'
         run: python -m unittest discover -s tests -v
-      - run: python -m PyInstaller --noconfirm --clean agentbox.spec
-      - run: python scripts/smoke_standalone.py "${{ matrix.executable }}"
+      - name: Build standalone executable
+        env:
+          AGENTBOX_BUILD_VERSION: ${{ needs.release-metadata.outputs.version }}
+          AGENTBOX_BUILD_COMMIT: ${{ github.sha }}
+          AGENTBOX_BUILD_REPOSITORY: ${{ github.repository }}
+        run: python -m PyInstaller --noconfirm --clean agentbox.spec
+      - name: Smoke-test standalone executable
+        run: >-
+          python scripts/smoke_standalone.py "${{ matrix.executable }}"
+          --expected-version "${{ needs.release-metadata.outputs.version }}"
+          --expected-commit "${{ github.sha }}"
       - name: Package Unix executable
         if: matrix.archive == 'tar'
         env:
           TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.release-metadata.outputs.version }}
         run: |
-          package="agentbox-latest-${TARGET}"
+          package="agentbox-${VERSION}-${TARGET}"
           mkdir -p "package/${package}" release
           cp dist/agentbox README.md LICENSE logo.png "package/${package}/"
+          printf '%s\n' "$VERSION" > "package/${package}/VERSION"
           printf '%s\n' "$GITHUB_SHA" > "package/${package}/SOURCE_COMMIT"
           python -c 'import platform, sys; print(sys.version); print(platform.platform()); print(platform.machine())' > "package/${package}/BUILD_ENVIRONMENT.txt"
           git archive --format=zip --prefix=agentbox-source/ --output="package/${package}/agentbox-source.zip" "$GITHUB_SHA"
@@ -96,17 +146,26 @@ jobs:
         shell: pwsh
         env:
           TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.release-metadata.outputs.version }}
         run: |
-          $package = "agentbox-latest-$env:TARGET"
+          $package = "agentbox-$env:VERSION-$env:TARGET"
           New-Item -ItemType Directory -Force -Path "package/$package", "release" | Out-Null
           Copy-Item "dist/agentbox.exe", "README.md", "LICENSE", "logo.png" -Destination "package/$package"
+          Set-Content -Path "package/$package/VERSION" -Value $env:VERSION
           Set-Content -Path "package/$package/SOURCE_COMMIT" -Value $env:GITHUB_SHA
+          @'
+          @echo off
+          setlocal
+          set "AGENTBOX_INSTALL_CHANNEL=scoop"
+          "%~dp0agentbox.exe" %*
+          exit /b %ERRORLEVEL%
+          '@ | Set-Content -Path "package/$package/agentbox-scoop.cmd" -Encoding ascii
           python -c "import platform, sys; print(sys.version); print(platform.platform()); print(platform.machine())" | Set-Content "package/$package/BUILD_ENVIRONMENT.txt"
           git archive --format=zip --prefix=agentbox-source/ --output="package/$package/agentbox-source.zip" $env:GITHUB_SHA
           python scripts/bundle_source_metadata.py "package/$package"
           python scripts/bundle_native_metadata.py build/agentbox/Analysis-00.toc "package/$package"
           Compress-Archive -Path "package/$package" -DestinationPath "release/$package.zip"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: agentbox-${{ matrix.target }}
           path: release/*
@@ -114,58 +173,110 @@ jobs:
           retention-days: 7
 
   publish:
-    name: Publish rolling release
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build
+    name: Publish semantic release
+    if: github.event_name == 'push' && needs.release-metadata.outputs.release == 'true'
+    needs:
+      - release-metadata
+      - build
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     concurrency:
-      group: agentbox-rolling-release
+      group: agentbox-semantic-release
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: release
           merge-multiple: true
       - name: Create checksums
         working-directory: release
         run: sha256sum agentbox-* > SHA256SUMS.txt
-      - name: Replace rolling release
+      - name: Publish immutable release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.release-metadata.outputs.version }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
         run: |
-          main_sha=$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
-          if [[ "$GITHUB_SHA" != "$main_sha" ]]; then
-            echo "Skipping superseded commit $GITHUB_SHA; main is now $main_sha"
-            exit 0
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Release commit $GITHUB_SHA is no longer part of main" >&2
+            exit 1
           fi
-          short_sha=${GITHUB_SHA::12}
-          release_tag="agentbox-latest-${GITHUB_SHA}"
-          notes="Automated native builds from main commit $short_sha. Every artifact passed its platform smoke test before publication. The exact AgentBox source commit and resolved build dependency manifest are bundled in every archive."
-          release_state="missing"
-          if gh release view "$release_tag" > /dev/null 2>&1; then
-            release_state=$(gh release view "$release_tag" --json isDraft --jq 'if .isDraft then "draft" else "published" end')
+
+          gh api --paginate "/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[].tag_name' | python scripts/release_version.py --require-newest "$VERSION"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+            tag_type=$(git cat-file -t "$RELEASE_TAG")
+            if [[ "$tag_type" != "commit" ]]; then
+              echo "Tag $RELEASE_TAG is not a lightweight tag" >&2
+              exit 1
+            fi
+            tag_sha=$(git rev-parse "$RELEASE_TAG")
+            if [[ "$tag_sha" != "$GITHUB_SHA" ]]; then
+              echo "Tag $RELEASE_TAG already points to $tag_sha" >&2
+              exit 1
+            fi
+          else
+            git tag "$RELEASE_TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$RELEASE_TAG"
           fi
-          if [[ "$release_state" == "draft" ]]; then
-            gh release delete "$release_tag" --cleanup-tag --yes
-            release_state="missing"
+
+          state=missing
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            state=$(gh release view "$RELEASE_TAG" --json isDraft --jq 'if .isDraft then "draft" else "published" end')
           fi
-          if [[ "$release_state" == "missing" ]]; then
-            gh release create "$release_tag" release/* \
+          if [[ "$state" == "draft" ]]; then
+            gh release delete "$RELEASE_TAG" --yes
+            state=missing
+          fi
+          if [[ "$state" == "missing" ]]; then
+            notes="Native AgentBox v$VERSION builds from commit ${GITHUB_SHA::12}. Every artifact passed its platform smoke test before publication. Exact source, dependency, native-library, hash, and license metadata are bundled in every archive."
+            gh release create "$RELEASE_TAG" release/* \
               --target "$GITHUB_SHA" \
-              --title "AgentBox latest" \
+              --title "AgentBox v$VERSION" \
               --notes "$notes" \
               --latest
           else
-            echo "Release $release_tag is already published; leaving its assets unchanged"
+            rm release/SHA256SUMS.txt
+            gh release download "$RELEASE_TAG" --pattern SHA256SUMS.txt --dir release
           fi
-          while IFS= read -r old_tag; do
-            if [[ "$old_tag" != "$release_tag" ]]; then
-              gh release delete "$old_tag" --cleanup-tag --yes
+      - name: Update Homebrew and Scoop manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.release-metadata.outputs.version }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
+        run: |
+          for attempt in 1 2 3; do
+            latest=$(gh api "/repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')
+            if [[ "$latest" != "$RELEASE_TAG" ]]; then
+              echo "A newer release $latest now owns the package manifests"
+              exit 0
             fi
-          done < <(
-            gh api --paginate "/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              --jq '.[] | select(.tag_name | startswith("agentbox-latest-")) | .tag_name'
-          )
+            git fetch origin main
+            git switch --detach origin/main
+            python scripts/generate_package_manifests.py \
+              --version "$VERSION" \
+              --repository "$GITHUB_REPOSITORY" \
+              --checksums release/SHA256SUMS.txt
+            git add Formula/agentbox.rb bucket/agentbox.json
+            if git diff --cached --quiet; then
+              echo "Package manifests already describe v$VERSION"
+              exit 0
+            fi
+            git -c user.name=github-actions[bot] \
+              -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+              commit -m "Update package manifests for v$VERSION [skip ci]"
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "Main changed while publishing manifests; retrying ($attempt/3)"
+            sleep 2
+          done
+          echo "Could not update package manifests after three attempts" >&2
+          exit 1

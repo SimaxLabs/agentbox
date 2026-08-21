@@ -113,7 +113,7 @@
       form.addEventListener("submit", function (event) {
         if (window.htmx) return;
         event.preventDefault();
-        var target = document.querySelector("#operation-panel");
+        var target = document.querySelector(form.dataset.target || "#operation-panel");
         fetch(form.action, {method: "POST", body: new FormData(form), credentials: "same-origin"})
           .then(function (response) { return response.text(); })
           .then(function (html) {
@@ -133,6 +133,11 @@
         if (card) card.remove();
       });
     });
+    root.querySelectorAll("[data-reload-update]").forEach(function (button) {
+      if (button.dataset.ready) return;
+      button.dataset.ready = "true";
+      button.addEventListener("click", function () { window.location.reload(); });
+    });
   }
 
   function initialize(root) {
@@ -145,5 +150,13 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () { initialize(document); });
+  document.addEventListener("htmx:beforeSwap", function (event) {
+    var response = event.detail.xhr;
+    var contentType = response.getResponseHeader("Content-Type") || "";
+    if (response.status >= 400 && response.status < 500 && contentType.indexOf("text/html") === 0) {
+      event.detail.shouldSwap = true;
+      event.detail.isError = false;
+    }
+  });
   document.addEventListener("htmx:afterSwap", function (event) { initialize(event.target); });
 })();

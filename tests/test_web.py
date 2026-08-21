@@ -10,6 +10,7 @@ try:
     import httpx
 
     from agentbox.web import create_app
+    from agentbox.update import UpdatePlan, UpdateResult, UpdateStatus
 except ModuleNotFoundError:
     httpx = None
     create_app = None
@@ -33,6 +34,8 @@ class AgentBoxWebTest(unittest.IsolatedAsyncioTestCase):
                 "XDG_STATE_HOME": str(self.root / "state-root"),
                 "AGENTBOX_CONFIG": "",
                 "AGENTBOX_HOST": "",
+                "AGENTBOX_NO_UPDATE_CHECK": "1",
+                "AGENTBOX_INSTALL_CHANNEL": "",
             },
         )
         environment.start()
@@ -98,6 +101,7 @@ class AgentBoxWebTest(unittest.IsolatedAsyncioTestCase):
         page = await self.client.get("/")
         logo = await self.client.get("/static/logo.png")
         manifest = await self.client.get("/static/site.webmanifest")
+        script = await self.client.get("/static/app.js")
 
         self.assertIn('href="/static/logo.png"', page.text)
         self.assertEqual(200, logo.status_code)
@@ -105,6 +109,8 @@ class AgentBoxWebTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(logo.content.startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertEqual(200, manifest.status_code)
         self.assertEqual("/static/logo.png", manifest.json()["icons"][0]["src"])
+        self.assertIn("htmx:beforeSwap", script.text)
+        self.assertIn("event.detail.shouldSwap = true", script.text)
 
     async def test_preview_does_not_write_and_confirmed_job_streams_events(self):
         self.add_command()
@@ -146,6 +152,104 @@ class AgentBoxWebTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(403, response.status_code)
         self.assertFalse(self.catalog.exists())
+
+    async def test_update_status_offers_review_for_a_new_standalone_build(self):
+        status = UpdateStatus(
+            "SimaxLabs/AgentBox",
+            "a" * 40,
+            "b" * 40,
+            "https://example.invalid/release",
+            True,
+            True,
+            "macos-arm64",
+            current_version="1.1.0",
+            latest_version="1.2.0",
+            version_relation="newer",
+            relation="ahead",
+        )
+        with patch("agentbox.web.check_for_updates", return_value=status):
+            response = await self.client.get("/updates/status")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("Update available", response.text)
+        self.assertIn("v1.2.0", response.text)
+        self.assertIn("bbbbbbbbbbbb", response.text)
+        self.assertIn("Review update", response.text)
+
+    async def test_update_status_renders_managed_commands_without_review_form(self):
+        for channel, command in (
+            ("homebrew", "brew upgrade agentbox"),
+            ("scoop", "scoop update agentbox"),
+        ):
+            status = UpdateStatus(
+                "SimaxLabs/AgentBox",
+                "a" * 40,
+                "b" * 40,
+                "https://github.com/SimaxLabs/AgentBox/releases/tag/v1.2.0",
+                True,
+                False,
+                "macos-arm64",
+                current_version="1.1.0",
+                latest_version="1.2.0",
+                version_relation="newer",
+                relation="ahead",
+                install_channel=channel,
+                install_command=command,
+            )
+            with self.subTest(channel=channel), patch(
+                "agentbox.web.check_for_updates", return_value=status
+            ):
+                response = await self.client.get("/updates/status")
+
+            self.assertEqual(200, response.status_code)
+            self.assertIn(command, response.text)
+            self.assertNotIn("Review update", response.text)
+            self.assertNotIn('action="/updates/preview"', response.text)
+
+    async def test_update_requires_csrf_and_single_use_review(self):
+        executable = self.root / "agentbox"
+        executable.write_bytes(b"old")
+        plan = UpdatePlan(
+            "SimaxLabs/AgentBox",
+            "a" * 40,
+            "b" * 40,
+            "https://example.invalid/release",
+            "macos-arm64",
+            "agentbox-1.2.0-macos-arm64.tar.gz",
+            "https://example.invalid/archive",
+            "c" * 64,
+            str(executable),
+            "d" * 64,
+            "1.1.0",
+            "1.2.0",
+        )
+        blocked = await self.client.post("/updates/preview", data={})
+        self.assertEqual(403, blocked.status_code)
+
+        with patch("agentbox.web.prepare_update_plan", return_value=plan):
+            preview = await self.client.post(
+                "/updates/preview", data={"csrf_token": self.csrf}
+            )
+        token = re.search(r'name="preview_token" value="([^"]+)"', preview.text).group(1)
+        self.assertIn("Verify and install", preview.text)
+        self.assertIn("v1.1.0", preview.text)
+        self.assertIn("v1.2.0", preview.text)
+
+        result = UpdateResult("Update installed.", True)
+        with patch("agentbox.web.install_update", return_value=result):
+            execute = await self.client.post(
+                "/updates/execute",
+                data={"csrf_token": self.csrf, "preview_token": token},
+            )
+        self.assertEqual(200, execute.status_code)
+        self.assertIn("Update installed", execute.text)
+
+        reused = await self.client.post(
+            "/updates/execute",
+            data={"csrf_token": self.csrf, "preview_token": token},
+        )
+        self.assertEqual(409, reused.status_code)
+        self.assertIn("already used", reused.text)
 
     async def test_confirmation_stops_if_filesystem_changed_after_preview(self):
         command = self.add_command()

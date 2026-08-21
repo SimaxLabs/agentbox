@@ -1,0 +1,70 @@
+{% if update_status.warning %}
+<div class="update-bar quiet">
+  <span>Previous update failed</span>
+  <small>{{ update_status.warning }}</small>
+</div>
+{% endif %}
+{% if update_status.stale %}
+<div class="update-bar quiet">
+  <span>Showing the last successful update check</span>
+  <small>The release service is temporarily unavailable.</small>
+</div>
+{% endif %}
+{% if update_status.disabled %}
+<div class="update-bar quiet">
+  <span>Update checks disabled</span>
+  <code>AGENTBOX_NO_UPDATE_CHECK</code>
+</div>
+{% elif update_status.error %}
+<div class="update-bar quiet">
+  <span>Update check unavailable</span>
+  <small>{{ update_status.error }}</small>
+</div>
+{% elif update_status.version_relation == "older" %}
+<div class="update-bar quiet">
+  <span>This installation {{ update_status.current_label }} is newer than the latest release {{ update_status.latest_label }}</span>
+  <small>Semantic downgrade refused. Current commit {{ update_status.current_commit_label }}; release commit {{ update_status.latest_commit_label }}.</small>
+</div>
+{% elif update_status.update_available %}
+<div class="update-bar available">
+  <div>
+    <span class="eyebrow">Update available</span>
+    <strong>AgentBox {{ update_status.latest_label }}</strong>
+    <small>Current {{ update_status.current_label }} (commit {{ update_status.current_commit_label }}); release commit {{ update_status.latest_commit_label }}.</small>
+  </div>
+  {% if update_status.install_channel %}
+  <div class="manual-update">
+    <span>Managed by {{ update_status.install_channel }}</span>
+    {% if update_status.install_command %}
+    <code>{{ update_status.install_command }}</code>
+    {% else %}
+    <small>Update through this installation channel. Direct replacement is disabled.</small>
+    {% endif %}
+  </div>
+  {% elif update_status.can_self_update %}
+  <form method="post" action="/updates/preview" hx-post="/updates/preview" hx-target="#update-awareness" hx-swap="innerHTML" data-async-form data-target="#update-awareness">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="update-action">Review update <span aria-hidden="true">-&gt;</span></button>
+  </form>
+  {% else %}
+  <div class="manual-update">
+    <span>Manual installation</span>
+    {% if update_status.relation in ["behind", "diverged", "identical"] %}
+    <small>The release commit is {{ update_status.relation }} relative to this build, so direct replacement was refused.</small>
+    {% else %}
+    <small>Update the source checkout or Python installation using the method that installed it.</small>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% elif update_status.update_available is none %}
+<div class="update-bar quiet">
+  <span>Latest release: AgentBox {{ update_status.latest_label }}</span>
+  <small>Release commit {{ update_status.latest_commit_label }}. This installation has no comparable semantic version and must be updated manually.</small>
+</div>
+{% else %}
+<div class="update-bar current">
+  <span>AgentBox is current</span>
+  <code>{{ update_status.current_label }} / commit {{ update_status.current_commit_label }}</code>
+</div>
+{% endif %}

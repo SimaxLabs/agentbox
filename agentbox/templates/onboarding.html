@@ -26,6 +26,10 @@
     </div>
   </header>
 
+  <section id="update-awareness" class="update-awareness" aria-live="polite" hx-get="/updates/status" hx-trigger="load" hx-swap="innerHTML">
+    <div class="update-bar quiet"><span>Checking for AgentBox updates...</span></div>
+  </section>
+
   <main class="onboarding-main">
     <aside class="onboarding-rail" aria-label="Setup progress">
       <p class="kicker">First run</p>

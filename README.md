@@ -76,14 +76,14 @@ AgentBox treats configuration movement as a filesystem operation, not a convenie
 
 ## GitHub Releases
 
-Every successful push to `main` replaces one rolling `latest` GitHub Release. Publication occurs only after every native build passes its platform smoke test:
+AgentBox publishes immutable semantic releases. A push to `main` creates a release only when its HEAD commit contains an exact `Release: vX.Y.Z` line matching the version in `pyproject.toml`. Publication occurs only after every native build passes its platform smoke test:
 
 | Archive | Platform |
 | --- | --- |
-| `agentbox-latest-macos-arm64.tar.gz` | Apple Silicon macOS |
-| `agentbox-latest-linux-x86_64.tar.gz` | x86-64 Linux |
-| `agentbox-latest-linux-arm64.tar.gz` | ARM64 Linux |
-| `agentbox-latest-windows-x86_64.zip` | 64-bit Windows |
+| `agentbox-X.Y.Z-macos-arm64.tar.gz` | Apple Silicon macOS |
+| `agentbox-X.Y.Z-linux-x86_64.tar.gz` | x86-64 Linux |
+| `agentbox-X.Y.Z-linux-arm64.tar.gz` | ARM64 Linux |
+| `agentbox-X.Y.Z-windows-x86_64.zip` | 64-bit Windows |
 
 Download and extract the archive for your machine, then put `agentbox` or `agentbox.exe` somewhere on `PATH`. The standalone executable includes the CLI, browser UI, templates, and static assets:
 
@@ -92,11 +92,56 @@ agentbox --help
 agentbox ui
 ```
 
-The release also includes `SHA256SUMS.txt`. Every native archive contains `SOURCE_COMMIT`, the exact AgentBox source tree in `agentbox-source.zip`, the resolved `DEPENDENCIES.txt`, `SOURCE_MANIFEST.json`, a hashed native-library inventory in `NATIVE_COMPONENTS.json`, all discovered license notices, and `BUILD_ENVIRONMENT.txt`. Source manifests include durable upstream locations and available SHA-256 digests. Unknown native dependencies stop the release instead of shipping without provenance.
+The release also includes `SHA256SUMS.txt`. Every native archive contains `VERSION`, `SOURCE_COMMIT`, the exact AgentBox source tree in `agentbox-source.zip`, the resolved `DEPENDENCIES.txt`, `SOURCE_MANIFEST.json`, a hashed native-library inventory in `NATIVE_COMPONENTS.json`, all discovered license notices, and `BUILD_ENVIRONMENT.txt`. Source manifests include durable upstream locations and available SHA-256 digests. Unknown native dependencies stop the release instead of shipping without provenance.
 
 Linux binaries require glibc 2.35 or newer, matching Ubuntu 22.04 and newer. Other distributions can use the Python installation when their libc is older.
 
 The current macOS and Windows builds are unsigned. Those operating systems may display an unidentified-developer warning until signing certificates are configured.
+
+## Homebrew
+
+The Homebrew formula supports Apple Silicon macOS and x86-64 or ARM64 Linux. Because the tap lives in the application repository, add its explicit URL once:
+
+```bash
+brew tap simaxlabs/agentbox https://github.com/SimaxLabs/agentbox.git
+brew install simaxlabs/agentbox/agentbox
+```
+
+Homebrew owns subsequent replacement:
+
+```bash
+brew upgrade agentbox
+```
+
+## Scoop
+
+The Scoop bucket installs the 64-bit Windows release:
+
+```powershell
+scoop bucket add agentbox https://github.com/SimaxLabs/agentbox.git
+scoop install agentbox/agentbox
+scoop update agentbox
+```
+
+The first semantic release generates `Formula/agentbox.rb` and `bucket/agentbox.json` with that release's exact archive hashes. Each later release updates both definitions automatically.
+
+## Updates
+
+AgentBox checks the latest semantic GitHub Release at startup and caches the result for six hours. When a newer version is available, the CLI prints a short notice and the browser UI displays an update banner.
+
+Standalone releases can update themselves:
+
+```bash
+agentbox update
+```
+
+The browser UI provides the same action through **Review update** and **Verify and install**. AgentBox downloads only the archive for the current platform, verifies its published SHA-256 checksum, confirms that the reviewed release and running executable have not changed, and then replaces the executable. Restart AgentBox after the CLI update; the browser UI stops after a successful update so it can be relaunched with the new build.
+
+Homebrew and Scoop installations remain update-aware but never replace their managed executable. AgentBox displays `brew upgrade agentbox` or `scoop update agentbox`, and the package manager performs the update. The managed wrapper sets `AGENTBOX_INSTALL_CHANNEL`; AgentBox also recognizes standard Homebrew Cellar and Scoop application paths and fails closed if the wrapper is bypassed.
+
+Python package and source installations still receive update awareness, but AgentBox does not modify Python environments or Git checkouts automatically. Update those installations using the same source or package workflow that installed them.
+
+Update checks contact `api.github.com` for `SimaxLabs/agentbox`; they do not send catalog contents or configuration data. Set `AGENTBOX_NO_UPDATE_CHECK=1` to disable automatic startup checks. An explicit `agentbox update` always performs a fresh check.
 
 ## Install from Source
 
@@ -280,17 +325,26 @@ Build and smoke-test a standalone executable:
 
 ```bash
 pip install -e '.[release]'
+AGENTBOX_BUILD_VERSION=0.2.0 \
+AGENTBOX_BUILD_COMMIT="$(git rev-parse HEAD)" \
+AGENTBOX_BUILD_REPOSITORY=SimaxLabs/agentbox \
 python3 -m PyInstaller --noconfirm --clean agentbox.spec
-python3 scripts/smoke_standalone.py dist/agentbox
+python3 scripts/smoke_standalone.py dist/agentbox \
+  --expected-version 0.2.0 \
+  --expected-commit "$(git rev-parse HEAD)"
 ```
 
-## Rolling Releases
+## Semantic Releases
 
-Push release-ready source to `main`. No version bump or manual tag is required.
+Set the intended version in `pyproject.toml`, then include one exact marker line in the release commit message:
 
-The `Release` workflow tests the source, builds all four native archives, executes each native binary, generates checksums, and publishes a commit-addressed release marked as GitHub's Latest. Only after the new release is public does it remove older rolling releases. Pull requests and manual workflow runs build and validate artifacts without replacing the public release.
+```text
+Release: v0.3.0
+```
 
-No manual version bump or release tag is needed. Internal release tags use the full `agentbox-latest-<commit>` identifier and are managed by the workflow.
+The `Release` workflow always tests pushes to `main`. It builds and publishes native artifacts only when the HEAD commit contains that marker and the marker matches `pyproject.toml`. A normal commit without the line creates no tag or release.
+
+The workflow creates an immutable lightweight `vX.Y.Z` tag, publishes all four versioned archives and `SHA256SUMS.txt`, marks the release as GitHub's Latest, then regenerates and commits the Homebrew and Scoop definitions. It refuses to publish a version older than an existing semantic release, never replaces a published release, and never deletes an older release. Pull requests and manual workflow runs build and validate artifacts without publishing.
 
 ## License
 

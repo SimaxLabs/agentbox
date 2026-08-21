@@ -39,6 +39,10 @@
     </div>
   </header>
 
+  <section id="update-awareness" class="update-awareness" aria-live="polite" hx-get="/updates/status" hx-trigger="load" hx-swap="innerHTML">
+    <div class="update-bar quiet"><span>Checking for AgentBox updates...</span></div>
+  </section>
+
   <main>
     <section class="hero hub-hero">
       <div>

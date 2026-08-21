@@ -50,6 +50,7 @@ class AgentBoxTest(unittest.TestCase):
             {
                 "AGENTBOX_CONFIG": "",
                 "AGENTBOX_HOST": "",
+                "AGENTBOX_NO_UPDATE_CHECK": "1",
                 "APPDATA": str(self.root / "appdata"),
                 "HOME": str(self.root / "home"),
                 "LOCALAPPDATA": str(self.root / "local-appdata"),
