@@ -22,9 +22,18 @@
         <span><strong>AgentBox</strong><small>local workspace</small></span>
       </a>
       <nav class="primary-nav" aria-label="Workspace navigation">
-        <a href="#workbench">Actions</a>
-        <a href="#provider-overview">Status</a>
-        <a href="#inventory">Catalog</a>
+        <a href="#workbench">
+          <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4.5 13H11l-1 9 8.5-11H12l1-9Z"/></svg></span>
+          <span>Actions</span>
+        </a>
+        <a href="#provider-overview">
+          <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h3l2-6 4 12 2-6h5"/><circle cx="12" cy="12" r="9"/></svg></span>
+          <span>Status</span>
+        </a>
+        <a href="#inventory">
+          <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v16H6.5A2.5 2.5 0 0 0 4 21.5v-16ZM20 5.5A2.5 2.5 0 0 0 17.5 3H13v16h4.5a2.5 2.5 0 0 1 2.5 2.5v-16Z"/></svg></span>
+          <span>Catalog</span>
+        </a>
       </nav>
       <div class="environment">
         <span class="local-badge"><i></i> Local only</span>
@@ -192,7 +201,8 @@
   </main>
 
   <footer>
-    <span><i></i> AgentBox runs entirely on this machine.</span>
+    <span class="footer-local"><i></i> AgentBox runs entirely on this machine.</span>
+    <span id="footer-version" class="footer-version" aria-live="polite"></span>
     <a href="#workbench">Back to actions</a>
   </footer>
 </body>

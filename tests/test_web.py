@@ -96,6 +96,7 @@ class AgentBoxWebTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, response.status_code)
         self.assertIn("AgentBox Workbench", response.text)
         self.assertIn("UNBACKED opencode commands/audit.md", response.text)
+        self.assertIn('id="footer-version"', response.text)
         self.assertIn("default-src 'self'", response.headers["content-security-policy"])
         self.assertEqual("no-store", response.headers["cache-control"])
 
@@ -282,6 +283,27 @@ class AgentBoxWebTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn(command, response.text)
             self.assertNotIn("Review update", response.text)
             self.assertNotIn('action="/updates/preview"', response.text)
+
+    async def test_current_update_status_moves_to_neutral_footer(self):
+        status = UpdateStatus(
+            "SimaxLabs/AgentBox",
+            "a" * 40,
+            "a" * 40,
+            "https://github.com/SimaxLabs/AgentBox/releases/tag/v0.1.2",
+            False,
+            current_version="0.1.2",
+            latest_version="0.1.2",
+            version_relation="equal",
+        )
+        with patch("agentbox.web.check_for_updates", return_value=status):
+            response = await self.client.get("/updates/status")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn('id="footer-version"', response.text)
+        self.assertIn('hx-swap-oob="innerHTML"', response.text)
+        self.assertIn("AgentBox is current", response.text)
+        self.assertIn("v0.1.2 / commit aaaaaaaaaaaa", response.text)
+        self.assertNotIn("update-bar current", response.text)
 
     async def test_update_install_routes_do_not_exist(self):
         for route in ("/updates/preview", "/updates/execute"):

@@ -55,7 +55,7 @@
   <small>Release commit {{ update_status.latest_commit_label }}. This installation has no comparable semantic version and must be updated manually. <a href="{{ update_status.release_url }}" target="_blank" rel="noreferrer">View GitHub release</a>.</small>
 </div>
 {% else %}
-<div class="update-bar current">
+<div id="footer-version" hx-swap-oob="innerHTML">
   <span>AgentBox is current</span>
   <code>{{ update_status.current_label }} / commit {{ update_status.current_commit_label }}</code>
 </div>
