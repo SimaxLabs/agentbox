@@ -290,7 +290,7 @@ class AgentBoxUpdateTest(unittest.TestCase):
         ), patch("agentbox.update.importlib.metadata.version") as package_version:
             repository, version, commit = current_build()
             self.assertEqual("SimaxLabs/agentbox", repository)
-            self.assertEqual("0.2.0", version)
+            self.assertEqual("0.1.0", version)
             self.assertEqual("d" * 40, commit)
             package_version.assert_not_called()
 
