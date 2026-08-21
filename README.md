@@ -32,21 +32,17 @@ Backup and restore are supported for:
 
 Cursor, Windsurf, Gemini CLI, GitHub Copilot, Continue, Goose, and Kiro are detected for visibility only. AgentBox shows their status but does not copy their files. Detection is not backup support.
 
-## Safety Model
+## Safety Before Convenience
 
-AgentBox treats configuration movement as a filesystem operation, not a convenience copy.
+Configuration is treated as valuable data, so uncertainty blocks the operation instead of becoming a destructive shortcut.
 
-- Multi-provider operations complete all preflight checks before writing.
-- Existing restore targets receive timestamped safety copies.
-- Symlinked sources, catalogs, and unsafe targets are rejected.
-- `--force` can explicitly permit replacement of symlinked restore targets from the CLI or reviewed UI operation.
-- Catalog traversal and overlapping destinations are rejected.
-- Missing sources cannot silently prune their only known backup.
-- Git pushes are never forced.
-- Rejected pushes roll back managed changes.
-- Ambiguous push outcomes preserve recoverable state for the next operation.
-- Dual storage stops when its copies disagree or Git is unavailable.
-- The web server binds only to loopback and serves all assets locally.
+- **Preflight the whole operation.** Multi-provider changes pass every check before the first write. Browser changes also require a reviewed dry run.
+- **Keep a way back.** Existing restore targets receive timestamped safety copies before replacement.
+- **Reject unsafe paths.** Symlinked sources, catalogs, traversal, and overlapping destinations are blocked. Replacing a symlinked restore target requires an explicit `--force`.
+- **Never prune blindly.** An unavailable source cannot silently remove its only known backup.
+- **Keep Git recoverable.** Pushes are never forced. Rejected pushes roll back managed changes, while ambiguous outcomes preserve recoverable state for the next run.
+- **Refuse split-brain storage.** Dual storage stops when its local and Git copies disagree or Git is unavailable.
+- **Keep the UI local.** The web server binds only to loopback and serves every asset locally.
 
 ## Install
 
