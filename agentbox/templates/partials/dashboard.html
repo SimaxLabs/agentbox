@@ -1,3 +1,4 @@
+{% set visible_tools = tools | selectattr("detected") | list %}
 <div class="workspace-overview" id="provider-overview">
   <div class="section-heading dashboard-heading">
     <div>
@@ -11,14 +12,14 @@
   </div>
 
   <div class="summary-grid">
-    <div><span>Active providers</span><strong>{{ tools | length }}</strong><small>configured here</small></div>
+    <div><span>Active providers</span><strong>{{ visible_tools | length }}</strong><small>detected here</small></div>
     <div><span>Catalog artifacts</span><strong>{{ inventory | length }}</strong><small>saved resources</small></div>
-    <div class="summary-ready"><span>Ready</span><strong>{{ tools | selectattr("state", "equalto", "clean") | list | length }}</strong><small>providers in sync</small></div>
-    <div class="summary-attention"><span>Need attention</span><strong>{{ tools | rejectattr("state", "equalto", "clean") | list | length }}</strong><small>providers to review</small></div>
+    <div class="summary-ready"><span>Ready</span><strong>{{ visible_tools | selectattr("state", "equalto", "clean") | list | length }}</strong><small>providers in sync</small></div>
+    <div class="summary-attention"><span>Need attention</span><strong>{{ visible_tools | rejectattr("state", "equalto", "clean") | list | length }}</strong><small>providers to review</small></div>
   </div>
 
   <div class="provider-workspace-list">
-    {% for tool in tools %}
+    {% for tool in visible_tools %}
     <article class="provider-workspace state-{{ tool.state }}" id="provider-{{ tool.id }}">
       <div class="provider-workspace-heading">
         <span class="provider-glyph large"><img src="/static/provider-{{ tool.id }}.svg" alt=""></span>
@@ -42,6 +43,8 @@
       {% set notable = tool.events | rejectattr("kind", "in", ["clean", "skip-derived", "skip-duplicate"]) | list %}
       {% if notable %}<details class="tool-findings"><summary>{{ notable | length }} status note{% if notable | length != 1 %}s{% endif %}</summary>{% for event in notable %}<code>{{ event.message }}</code>{% endfor %}</details>{% endif %}
     </article>
+    {% else %}
+    <div class="provider-empty"><strong>No providers detected</strong><p>Install or open a supported provider, then refresh the workspace.</p></div>
     {% endfor %}
   </div>
 

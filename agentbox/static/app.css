@@ -302,6 +302,9 @@ footer a { color: var(--ink); font-weight: 700; }
 .detected .detection-pill i { background: var(--green); }
 .provider-choice h3 { margin: 18px 0 4px; font-size: 1rem; }
 .provider-choice > p { min-height: 36px; margin: 0 0 14px; color: var(--ink-soft); font-size: 0.63rem; line-height: 1.45; }
+.provider-empty { grid-column: 1 / -1; border: 1px dashed var(--line-strong); border-radius: 14px; padding: 24px; color: var(--ink-soft); text-align: center; }
+.provider-empty strong { color: var(--ink); font-size: 0.78rem; }
+.provider-empty p { margin: 6px 0 0; font-size: 0.64rem; line-height: 1.5; }
 .resource-toggle-list { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
 .resource-toggle { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; cursor: pointer; }
 .resource-toggle strong, .resource-toggle small { display: block; }

@@ -55,11 +55,11 @@
           <div><h2 id="managed-heading">Managed providers</h2><p>Select the resources that belong in your catalog.</p></div>
         </div>
         <div class="provider-choice-grid">
-          {% for provider in providers if provider.mode == "managed" %}
+          {% for provider in providers if provider.mode == "managed" and provider.detected %}
           <article class="provider-choice {% if provider.detected %}detected{% endif %}">
             <div class="provider-choice-top">
               <span class="provider-glyph"><img src="/static/provider-{{ provider.id }}.svg" alt=""></span>
-              <span class="detection-pill"><i></i>{{ "Detected" if provider.detected else "Not detected" }}</span>
+              <span class="detection-pill"><i></i>Detected</span>
             </div>
             <h3>{{ provider.name }}</h3>
             <p>{{ provider.description }}</p>
@@ -72,6 +72,8 @@
               {% endfor %}
             </div>
           </article>
+          {% else %}
+          <div class="provider-empty"><strong>No managed providers detected</strong><p>Install or open Claude Code, Codex, or OpenCode, then refresh this page.</p></div>
           {% endfor %}
         </div>
       </section>
@@ -97,6 +99,8 @@
         </div>
       </section>
 
+      {% set detected_ecosystem = providers | selectattr("mode", "equalto", "detection-only") | selectattr("detected") | list %}
+      {% if detected_ecosystem %}
       <details class="setup-section future-providers" aria-labelledby="detected-heading">
         <summary class="setup-section-heading">
           <span>03</span>
@@ -105,15 +109,16 @@
         </summary>
         <p class="section-copy">These providers are recognized now. Typed resource support will arrive without unsafe generic file copying.</p>
         <div class="detected-provider-list">
-          {% for provider in providers if provider.mode == "detection-only" %}
-          <div class="detected-provider {% if provider.detected %}detected{% endif %}">
+          {% for provider in detected_ecosystem %}
+          <div class="detected-provider detected">
             <span class="provider-glyph">{{ provider.name[:2] | upper }}</span>
             <span><strong>{{ provider.name }}</strong><small>{{ provider.resource_labels | join(" / ") }}</small></span>
-            <b>{{ "Found" if provider.detected else "Planned" }}</b>
+            <b>Found</b>
           </div>
           {% endfor %}
         </div>
       </details>
+      {% endif %}
 
       <button type="submit" class="setup-submit">Preview machine setup <span aria-hidden="true">-&gt;</span></button>
     </form>

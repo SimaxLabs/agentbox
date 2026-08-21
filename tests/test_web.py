@@ -101,6 +101,7 @@ class AgentBoxWebTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_brand_assets_are_served_locally(self):
         page = await self.client.get("/")
+        providers = await self.client.get("/onboarding")
         logo = await self.client.get("/static/logo.png")
         manifest = await self.client.get("/static/site.webmanifest")
         script = await self.client.get("/static/app.js")
@@ -123,9 +124,14 @@ class AgentBoxWebTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual("image/svg+xml", provider_logo.headers["content-type"])
                 self.assertTrue(provider_logo.text.startswith("<svg"))
 
-        self.assertIn('src="/static/provider-opencode.svg"', page.text)
+        self.assertNotIn('src="/static/provider-opencode.svg"', page.text)
         self.assertIn("Workspace operations", page.text)
         self.assertNotIn("Your AI workspace, kept safe", page.text)
+        self.assertNotIn('src="/static/provider-opencode.svg"', providers.text)
+        self.assertNotIn('src="/static/provider-claude.svg"', providers.text)
+        self.assertNotIn('src="/static/provider-codex.svg"', providers.text)
+        self.assertNotIn("Not detected", providers.text)
+        self.assertNotIn("Planned", providers.text)
 
     async def test_preview_does_not_write_and_confirmed_job_streams_events(self):
         self.add_command()
@@ -353,6 +359,9 @@ class AgentBoxWebTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, page.status_code)
         self.assertIn("Map your AI", page.text)
         self.assertIn("Managed providers", page.text)
+        self.assertIn("No managed providers detected", page.text)
+        self.assertNotIn("Not detected", page.text)
+        self.assertNotIn("Planned", page.text)
         self.assertFalse(self.config.exists())
 
         preview = await client.post(

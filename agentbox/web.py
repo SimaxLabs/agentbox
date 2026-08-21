@@ -408,6 +408,11 @@ class WebRuntime:
                     acquire_lock=False,
                 )
                 config = load_config(self.config_path, selected_host)
+                detected_providers = {
+                    provider["id"]
+                    for provider in provider_detection(config)
+                    if provider["detected"]
+                }
                 tools = []
                 inventory = []
                 for tool_name in sorted(config["tools"]):
@@ -443,6 +448,7 @@ class WebRuntime:
                             "id": tool_name,
                             "name": config["tools"][tool_name]["_name"],
                             "description": config["tools"][tool_name]["_description"],
+                            "detected": tool_name in detected_providers,
                             "portable_target": config["tools"][tool_name]["skills"]["_enabled"],
                             "state": state,
                             "state_label": state_label,

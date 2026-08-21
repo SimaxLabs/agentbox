@@ -44,6 +44,7 @@
     <div class="update-bar quiet"><span>Checking for AgentBox updates...</span></div>
   </section>
 
+  {% set visible_tools = tools | selectattr("detected") | list %}
   <main>
     <section class="workbench" id="workbench">
       <div class="section-heading">
@@ -67,7 +68,7 @@
             Target provider
             <select name="tool">
               <option value="all">All configured providers</option>
-              {% for tool in tools %}<option value="{{ tool.id }}">{{ tool.name }}</option>{% endfor %}
+              {% for tool in visible_tools %}<option value="{{ tool.id }}">{{ tool.name }}</option>{% endfor %}
             </select>
           </label>
           <div class="option-list">
@@ -96,7 +97,7 @@
               Target provider
               <select name="tool">
                 <option value="all">All configured providers</option>
-                {% for tool in tools %}<option value="{{ tool.id }}" data-portable="{{ 'true' if tool.portable_target else 'false' }}">{{ tool.name }}</option>{% endfor %}
+                {% for tool in visible_tools %}<option value="{{ tool.id }}" data-portable="{{ 'true' if tool.portable_target else 'false' }}">{{ tool.name }}</option>{% endfor %}
               </select>
             </label>
             <label>
@@ -112,7 +113,7 @@
             <select name="source_mode" data-source-mode>
               <option value="matching">Matching target provider</option>
               <option value="all">Every provider catalog</option>
-              {% for tool in tools %}<option value="tool:{{ tool.id }}">Only {{ tool.name }}</option>{% endfor %}
+              {% for tool in visible_tools %}<option value="tool:{{ tool.id }}">Only {{ tool.name }}</option>{% endfor %}
             </select>
           </label>
           {% if history_enabled %}
