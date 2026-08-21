@@ -153,18 +153,18 @@ def main() -> int:
                 )
             )
 
-        help_result = subprocess.run(
-            [str(executable), "--help"],
+        update_result = subprocess.run(
+            [str(executable), "update"],
             cwd=root,
             env=environment,
             text=True,
             capture_output=True,
             timeout=60,
         )
-        if help_result.returncode != 0 or "update" not in help_result.stdout:
+        if update_result.returncode == 0 or "invalid choice" not in update_result.stderr:
             raise RuntimeError(
-                "Frozen update command smoke test failed:\n{}\n{}".format(
-                    help_result.stdout, help_result.stderr
+                "Frozen executable unexpectedly exposes an update command:\n{}\n{}".format(
+                    update_result.stdout, update_result.stderr
                 )
             )
 

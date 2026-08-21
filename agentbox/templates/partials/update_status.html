@@ -1,9 +1,3 @@
-{% if update_status.warning %}
-<div class="update-bar quiet">
-  <span>Previous update failed</span>
-  <small>{{ update_status.warning }}</small>
-</div>
-{% endif %}
 {% if update_status.stale %}
 <div class="update-bar quiet">
   <span>Showing the last successful update check</span>
@@ -38,29 +32,27 @@
     {% if update_status.install_command %}
     <code>{{ update_status.install_command }}</code>
     {% else %}
-    <small>Update through this installation channel. Direct replacement is disabled.</small>
+    <small>Update through this installation channel.</small>
     {% endif %}
   </div>
-  {% elif update_status.can_self_update %}
-  <form method="post" action="/updates/preview" hx-post="/updates/preview" hx-target="#update-awareness" hx-swap="innerHTML" data-async-form data-target="#update-awareness">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button type="submit" class="update-action">Review update <span aria-hidden="true">-&gt;</span></button>
-  </form>
+  {% elif update_status.standalone %}
+  <div class="manual-update">
+    <span>Manual download</span>
+    <small>AgentBox never replaces its own executable.</small>
+    <a class="text-action" href="{{ update_status.release_url }}" target="_blank" rel="noreferrer">Open GitHub release</a>
+  </div>
   {% else %}
   <div class="manual-update">
     <span>Manual installation</span>
-    {% if update_status.relation in ["behind", "diverged", "identical"] %}
-    <small>The release commit is {{ update_status.relation }} relative to this build, so direct replacement was refused.</small>
-    {% else %}
     <small>Update the source checkout or Python installation using the method that installed it.</small>
-    {% endif %}
+    <a class="text-action" href="{{ update_status.release_url }}" target="_blank" rel="noreferrer">View GitHub release</a>
   </div>
   {% endif %}
 </div>
 {% elif update_status.update_available is none %}
 <div class="update-bar quiet">
   <span>Latest release: AgentBox {{ update_status.latest_label }}</span>
-  <small>Release commit {{ update_status.latest_commit_label }}. This installation has no comparable semantic version and must be updated manually.</small>
+  <small>Release commit {{ update_status.latest_commit_label }}. This installation has no comparable semantic version and must be updated manually. <a href="{{ update_status.release_url }}" target="_blank" rel="noreferrer">View GitHub release</a>.</small>
 </div>
 {% else %}
 <div class="update-bar current">

@@ -4,45 +4,25 @@
   <img src="logo.png" alt="AgentBox logo" width="150">
 </p>
 
-AgentBox is a local-first catalog for the configuration that makes AI coding agents useful: skills, commands, prompts, supporting files, modes, and source lineage.
+**Your AI coding setup should not be trapped in one tool or on one machine.**
 
-It gives Claude Code, Codex, and OpenCode one deliberate backup and restore workflow without flattening their original formats. Backups can live in a local folder, a Git repository you manage, or both.
+AgentBox backs up the skills, commands, prompts, and supporting files used by Claude Code, Codex, and OpenCode without rewriting them. Restore exact originals, move compatible resources between providers, and stop conflicts before they touch a target.
 
-## Why AgentBox
+Keep the catalog in a local folder, a Git repository, or both. Every browser write starts with a reviewed dry run. No hosted service, account, analytics, or telemetry.
 
-### Exact on the way in
+## AI Development Disclosure
 
-AgentBox preserves artifact bytes, supporting files, POSIX executable modes when the filesystem exposes them, relative source locations, and stable source IDs. Backup does not convert commands or rewrite skills.
+AgentBox is built with substantial assistance from GPT 5.5, GPT 5.6, and Claude Fable. Humans decide the behavior and own the testing, debugging, and review.
 
-### Portable on the way out
+That is not hidden or softened: if you do not want AI-assisted software, do not use AgentBox.
 
-Restore exact originals to their recorded locations, or turn compatible commands and prompts into portable skill packages for another supported provider. Divergent artifacts stop before any target is changed.
-
-### Every browser write is reviewed
-
-The browser UI requires a dry-run preview before execution. Confirmation uses a short-lived, single-use token, repeats preflight under the operation lock, and rejects the operation if the filesystem or reviewed plan changed.
-
-### Storage without a hosted service
-
-- Local folder, including a cloud-synced folder or NAS mount
-- Managed Git repository using your existing SSH or credential helper
-- Dual local and Git copies with strict divergence checks
-
-AgentBox does not provide a hosted cloud, account system, analytics, or telemetry.
-
-AgentBox cannot verify remote visibility. If your catalog contains sensitive material, confirm that the Git repository is private before pushing.
-
-### Designed for multiple machines
-
-Catalog entries are separated by host namespace. AgentBox runs on macOS, Linux, and Windows and uses platform-appropriate configuration, data, and state directories.
-
-### Provider-first visibility
-
-First-run onboarding detects known providers and lets you enable resources explicitly. The workbench shows provider health, source availability, catalog artifacts, origins, storage, and live operation logs.
+AI output is not treated as proof. Verification includes isolated filesystem tests, local bare Git repositories, browser security tests, package builds, dry-run invariants, and explicit human review of failures.
 
 ## Supported Providers
 
-Typed backup and restore support:
+**AgentBox only writes provider formats it understands.**
+
+Backup and restore are supported for:
 
 | Provider | Managed resources |
 | --- | --- |
@@ -50,7 +30,7 @@ Typed backup and restore support:
 | Codex | Skills and prompts |
 | OpenCode | Skills and commands |
 
-Detection-only visibility is included for Cursor, Windsurf, Gemini CLI, GitHub Copilot, Continue, Goose, and Kiro. AgentBox shows these providers without applying unsafe generic file-copy behavior. Typed support will be added provider by provider.
+Cursor, Windsurf, Gemini CLI, GitHub Copilot, Continue, Goose, and Kiro are detected for visibility only. AgentBox shows their status but does not copy their files. Detection is not backup support.
 
 ## Safety Model
 
@@ -68,37 +48,9 @@ AgentBox treats configuration movement as a filesystem operation, not a convenie
 - Dual storage stops when its copies disagree or Git is unavailable.
 - The web server binds only to loopback and serves all assets locally.
 
-## Requirements
+## Install
 
-- Standalone release: no Python installation required
-- Source or Python package installation: Python 3.14 or newer
-- Git only when managed Git storage is enabled
-
-## GitHub Releases
-
-AgentBox publishes immutable semantic releases. A push to `main` creates a release only when its HEAD commit contains an exact `Release: vX.Y.Z` line matching the version in `pyproject.toml`. Publication occurs only after every native build passes its platform smoke test:
-
-| Archive | Platform |
-| --- | --- |
-| `agentbox-X.Y.Z-macos-arm64.tar.gz` | Apple Silicon macOS |
-| `agentbox-X.Y.Z-linux-x86_64.tar.gz` | x86-64 Linux |
-| `agentbox-X.Y.Z-linux-arm64.tar.gz` | ARM64 Linux |
-| `agentbox-X.Y.Z-windows-x86_64.zip` | 64-bit Windows |
-
-Download and extract the archive for your machine, then put `agentbox` or `agentbox.exe` somewhere on `PATH`. The standalone executable includes the CLI, browser UI, templates, and static assets:
-
-```bash
-agentbox --help
-agentbox ui
-```
-
-The release also includes `SHA256SUMS.txt`. Every native archive contains `VERSION`, `SOURCE_COMMIT`, the exact AgentBox source tree in `agentbox-source.zip`, the resolved `DEPENDENCIES.txt`, `SOURCE_MANIFEST.json`, a hashed native-library inventory in `NATIVE_COMPONENTS.json`, all discovered license notices, and `BUILD_ENVIRONMENT.txt`. Source manifests include durable upstream locations and available SHA-256 digests. Unknown native dependencies stop the release instead of shipping without provenance.
-
-Linux binaries require glibc 2.35 or newer, matching Ubuntu 22.04 and newer. Other distributions can use the Python installation when their libc is older.
-
-The current macOS and Windows builds are unsigned. Those operating systems may display an unidentified-developer warning until signing certificates are configured.
-
-## Homebrew
+### Homebrew
 
 The Homebrew formula supports Apple Silicon macOS and x86-64 or ARM64 Linux. Because the tap lives in the application repository, add its explicit URL once:
 
@@ -113,7 +65,7 @@ Homebrew owns subsequent replacement:
 brew upgrade agentbox
 ```
 
-## Scoop
+### Scoop
 
 The Scoop bucket installs the 64-bit Windows release:
 
@@ -123,27 +75,9 @@ scoop install agentbox/agentbox
 scoop update agentbox
 ```
 
-The first semantic release generates `Formula/agentbox.rb` and `bucket/agentbox.json` with that release's exact archive hashes. Each later release updates both definitions automatically.
+### From Source
 
-## Updates
-
-AgentBox checks the latest semantic GitHub Release at startup and caches the result for six hours. When a newer version is available, the CLI prints a short notice and the browser UI displays an update banner.
-
-Standalone releases can update themselves:
-
-```bash
-agentbox update
-```
-
-The browser UI provides the same action through **Review update** and **Verify and install**. AgentBox downloads only the archive for the current platform, verifies its published SHA-256 checksum, confirms that the reviewed release and running executable have not changed, and then replaces the executable. Restart AgentBox after the CLI update; the browser UI stops after a successful update so it can be relaunched with the new build.
-
-Homebrew and Scoop installations remain update-aware but never replace their managed executable. AgentBox displays `brew upgrade agentbox` or `scoop update agentbox`, and the package manager performs the update. The managed wrapper sets `AGENTBOX_INSTALL_CHANNEL`; AgentBox also recognizes standard Homebrew Cellar and Scoop application paths and fails closed if the wrapper is bypassed.
-
-Python package and source installations still receive update awareness, but AgentBox does not modify Python environments or Git checkouts automatically. Update those installations using the same source or package workflow that installed them.
-
-Update checks contact `api.github.com` for `SimaxLabs/agentbox`; they do not send catalog contents or configuration data. Set `AGENTBOX_NO_UPDATE_CHECK=1` to disable automatic startup checks. An explicit `agentbox update` always performs a fresh check.
-
-## Install from Source
+Source installation requires Python 3.14 or newer.
 
 ```bash
 python3 -m venv .venv
@@ -168,7 +102,22 @@ agentbox-ui
 
 The executable source launcher is `./agentbox.py`.
 
+## Updates
+
+**AgentBox tells you when a new version exists. It never installs one for you.**
+
+After a successful CLI operation, AgentBox checks the latest release and caches the result for six hours. The CLI prints a notice and the browser UI shows a banner when an update is available.
+
+- Homebrew: run `brew upgrade agentbox`.
+- Scoop: run `scoop update agentbox`.
+- Standalone executable: follow the release link and download it again.
+- Source or Python package: repeat the installation method you originally used.
+
+Update checks contact `api.github.com` for `SimaxLabs/agentbox`; they do not send catalog contents or configuration data. Set `AGENTBOX_NO_UPDATE_CHECK=1` to disable automatic checks.
+
 ## First Run
+
+**First run is a reviewed setup, not a silent configuration step.**
 
 ```bash
 agentbox ui
@@ -182,7 +131,7 @@ When no configuration is discovered, AgentBox opens onboarding and:
 4. Shows a dry-run of the configuration change.
 5. Saves only after explicit confirmation.
 
-The repository includes `agentbox.json`, so launching from its checkout uses that development configuration. Run the installed command from another directory to exercise first-run onboarding.
+Running from this repository uses its included `agentbox.json` and skips onboarding. Run the installed command from another directory to see the first-run flow.
 
 The browser UI is available at `http://127.0.0.1:8765` by default.
 
@@ -290,68 +239,6 @@ Global options must precede the action:
 agentbox --config /path/to/agentbox.json backup all
 ```
 
-## Architecture
-
-- `agentbox/core.py` owns backup, restore, status, provider compilation, storage transactions, path validation, atomic writes, and operation locks.
-- CLI and browser operations share the same typed `OperationRequest` and `OperationEvent` boundary.
-- Provider definitions are immutable package data in `agentbox/providers.json`.
-- The browser UI is loopback-only, server-rendered, HTMX-enhanced, and usable offline.
-- Core backup and restore operations remain independent of web dependencies.
-
-## AI Development Disclosure
-
-This software is developed with strong assistance from GPT 5.5, GPT 5.6, and Claude Fable, with humans leading the ideas, testing, and debugging. We say this openly because it shaped how the project was built.
-
-If you are not comfortable using AI-developed code, this software is not for you.
-
-AI assistance does not replace verification: AgentBox uses isolated filesystem tests, local bare Git repositories, browser security tests, package builds, dry-run invariants, and explicit human review of behavior and failures.
-
-## Tests
-
-Run the dependency-free suite:
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-Run the complete suite:
-
-```bash
-pip install -e '.[test]'
-python3 -m unittest discover -s tests -v
-```
-
-Build and smoke-test a standalone executable:
-
-```bash
-pip install -e '.[release]'
-AGENTBOX_BUILD_VERSION=0.2.0 \
-AGENTBOX_BUILD_COMMIT="$(git rev-parse HEAD)" \
-AGENTBOX_BUILD_REPOSITORY=SimaxLabs/agentbox \
-python3 -m PyInstaller --noconfirm --clean agentbox.spec
-python3 scripts/smoke_standalone.py dist/agentbox \
-  --expected-version 0.2.0 \
-  --expected-commit "$(git rev-parse HEAD)"
-```
-
-## Semantic Releases
-
-Set the intended version in `pyproject.toml`, then include one exact marker line in the release commit message:
-
-```text
-Release: v0.3.0
-```
-
-The `Release` workflow always tests pushes to `main`. It builds and publishes native artifacts only when the HEAD commit contains that marker and the marker matches `pyproject.toml`. A normal commit without the line creates no tag or release.
-
-The workflow creates an immutable lightweight `vX.Y.Z` tag, publishes all four versioned archives and `SHA256SUMS.txt`, marks the release as GitHub's Latest, then regenerates and commits the Homebrew and Scoop definitions. It refuses to publish a version older than an existing semantic release, never replaces a published release, and never deletes an older release. Pull requests and manual workflow runs build and validate artifacts without publishing.
-
 ## License
 
 AgentBox is licensed under the GNU General Public License v3.0 only (`GPL-3.0-only`). See `LICENSE`.
-
-Verify packaging:
-
-```bash
-python3 -m pip wheel . --no-deps --wheel-dir /tmp/agentbox-wheel
-```

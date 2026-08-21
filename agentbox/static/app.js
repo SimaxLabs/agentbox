@@ -133,11 +133,6 @@
         if (card) card.remove();
       });
     });
-    root.querySelectorAll("[data-reload-update]").forEach(function (button) {
-      if (button.dataset.ready) return;
-      button.dataset.ready = "true";
-      button.addEventListener("click", function () { window.location.reload(); });
-    });
   }
 
   function initialize(root) {

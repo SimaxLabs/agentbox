@@ -2284,24 +2284,8 @@ def application_lock_identity() -> Path:
 
 @contextmanager
 def application_operation_guard(*identities: Path):
-    """Serialize operations with application replacement and reject pending updates."""
+    """Serialize AgentBox operations across configurations and storage roots."""
     with operation_guard(application_lock_identity(), *identities):
-        if os.name == "nt" and getattr(sys, "frozen", False):
-            executable = Path(sys.executable).resolve()
-            marker = executable.with_name(".{}.update-pending".format(executable.name))
-            if marker.exists():
-                try:
-                    marker_age = time.time() - marker.lstat().st_mtime
-                    if marker_age > 60 * 60:
-                        marker.unlink()
-                except OSError as exc:
-                    raise AgentBoxError(
-                        "Cannot inspect the pending AgentBox update: {}".format(exc)
-                    )
-            if marker.exists():
-                raise AgentBoxError(
-                    "An AgentBox update is pending; close this process and try again after it finishes"
-                )
         yield
 
 

@@ -1,47 +1,34 @@
-"""Update awareness and verified standalone self-updates."""
+"""Release awareness and installation-channel guidance."""
 
 from __future__ import annotations
 
-import hashlib
 import importlib.metadata
 import json
 import math
 import os
-import platform
 import re
 import shutil
-import stat
 import subprocess
 import sys
-import tarfile
-import tempfile
 import time
 import tomllib
 import uuid
-import zipfile
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
+from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urlsplit
 from urllib.request import Request, urlopen
 
-from .core import (
-    AgentBoxError,
-    application_lock_identity,
-    external_program_environment,
-    operation_guard,
-    user_state_root,
-)
+from .core import AgentBoxError, external_program_environment, user_state_root
 
 
 DEFAULT_UPDATE_REPOSITORY = "SimaxLabs/agentbox"
-UPDATE_CACHE_VERSION = 2
+UPDATE_CACHE_VERSION = 3
 UPDATE_CACHE_TTL_SECONDS = 6 * 60 * 60
 UPDATE_FAILURE_TTL_SECONDS = 10 * 60
 NETWORK_TIMEOUT_SECONDS = 8
 MAX_METADATA_BYTES = 2 * 1024 * 1024
-MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
-MAX_EXECUTABLE_BYTES = 256 * 1024 * 1024
 SEMANTIC_VERSION = re.compile(
     r"^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$"
 )
@@ -52,13 +39,6 @@ FULL_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_REPOSITORY = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$"
 )
-SHA256 = re.compile(r"^[0-9a-f]{64}$")
-
-
-@dataclass(frozen=True)
-class ReleaseAsset:
-    name: str
-    url: str
 
 
 @dataclass(frozen=True)
@@ -67,7 +47,6 @@ class ReleaseInfo:
     commit: str
     tag: str
     page_url: str
-    assets: tuple[ReleaseAsset, ...]
     version: str = ""
 
     def __post_init__(self) -> None:
@@ -92,18 +71,15 @@ class UpdateStatus:
     latest_commit: str | None
     release_url: str | None
     update_available: bool | None
-    can_self_update: bool
-    target: str | None
     error: str | None = None
     disabled: bool = False
-    relation: str | None = None
     stale: bool = False
-    warning: str | None = None
     current_version: str | None = None
     latest_version: str | None = None
     version_relation: str | None = None
     install_channel: str | None = None
     install_command: str | None = None
+    standalone: bool = False
 
     @property
     def current_label(self) -> str:
@@ -122,37 +98,11 @@ class UpdateStatus:
         return self.latest_commit[:12] if self.latest_commit else "unknown"
 
 
-@dataclass(frozen=True)
-class UpdatePlan:
-    repository: str
-    current_commit: str
-    latest_commit: str
-    release_url: str
-    target: str
-    archive_name: str
-    archive_url: str
-    archive_sha256: str
-    executable_path: str
-    executable_sha256: str
-    current_version: str = ""
-    latest_version: str = ""
-
-    def identity(self) -> str:
-        payload = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-@dataclass(frozen=True)
-class UpdateResult:
-    message: str
-    restart_required: bool
-
-
 def _request(url: str) -> Request:
     return Request(
         url,
         headers={
-            "Accept": "application/vnd.github+json, application/octet-stream",
+            "Accept": "application/vnd.github+json",
             "User-Agent": "AgentBox-update-check",
             "X-GitHub-Api-Version": "2022-11-28",
         },
@@ -166,7 +116,7 @@ def _read_url(url: str, maximum: int = MAX_METADATA_BYTES) -> bytes:
             if declared and int(declared) > maximum:
                 raise AgentBoxError("Update metadata exceeded the allowed size")
             payload = response.read(maximum + 1)
-    except (HTTPError, URLError, OSError, ValueError) as exc:
+    except (HTTPError, URLError, HTTPException, OSError, ValueError) as exc:
         raise AgentBoxError("Cannot contact the AgentBox release service: {}".format(exc))
     if len(payload) > maximum:
         raise AgentBoxError("Update metadata exceeded the allowed size")
@@ -246,27 +196,8 @@ def _valid_github_url(url: object, expected_path: str) -> bool:
     )
 
 
-def _valid_asset_name(name: object) -> bool:
-    return (
-        isinstance(name, str)
-        and bool(name)
-        and name not in {".", ".."}
-        and "/" not in name
-        and "\\" not in name
-        and Path(name).name == name
-        and not any(ord(character) < 32 or ord(character) == 127 for character in name)
-    )
-
-
 def _valid_release_page(repository: str, tag: str, url: object) -> bool:
     return _valid_github_url(url, "/{}/releases/tag/{}".format(repository, tag))
-
-
-def _valid_release_asset(repository: str, tag: str, asset: ReleaseAsset) -> bool:
-    return _valid_asset_name(asset.name) and _valid_github_url(
-        asset.url,
-        "/{}/releases/download/{}/{}".format(repository, tag, asset.name),
-    )
 
 
 def _build_info() -> dict[str, str]:
@@ -346,20 +277,6 @@ def current_build(*, inspect_git: bool = True) -> tuple[str, str | None, str | N
     return DEFAULT_UPDATE_REPOSITORY, _installed_version(), None
 
 
-def release_target() -> str | None:
-    system = platform.system()
-    machine = platform.machine().lower()
-    if system == "Darwin" and machine in {"arm64", "aarch64"}:
-        return "macos-arm64"
-    if system == "Linux" and machine in {"x86_64", "amd64"}:
-        return "linux-x86_64"
-    if system == "Linux" and machine in {"arm64", "aarch64"}:
-        return "linux-arm64"
-    if system == "Windows" and machine in {"amd64", "x86_64"}:
-        return "windows-x86_64"
-    return None
-
-
 def fetch_latest_release(repository: str) -> ReleaseInfo:
     if GITHUB_REPOSITORY.fullmatch(repository) is None:
         raise AgentBoxError("The AgentBox update repository is invalid")
@@ -391,43 +308,10 @@ def fetch_latest_release(repository: str) -> ReleaseInfo:
         or reference_object.get("sha") != commit
     ):
         raise AgentBoxError("The latest AgentBox release tag is not a matching lightweight tag")
-    asset_values = payload.get("assets")
-    if not isinstance(asset_values, list):
-        raise AgentBoxError("The latest AgentBox release has invalid assets")
-    assets = []
-    names = set()
-    for item in asset_values:
-        if not isinstance(item, dict):
-            raise AgentBoxError("The latest AgentBox release has invalid assets")
-        name = item.get("name")
-        url = item.get("browser_download_url")
-        asset = ReleaseAsset(name, url) if isinstance(name, str) and isinstance(url, str) else None
-        if (
-            asset is None
-            or asset.name in names
-            or not _valid_release_asset(repository, tag, asset)
-        ):
-            raise AgentBoxError("The latest AgentBox release has invalid assets")
-        names.add(asset.name)
-        assets.append(asset)
     page_url = payload.get("html_url")
     if not _valid_release_page(repository, tag, page_url):
         raise AgentBoxError("The latest AgentBox release has no valid page URL")
-    return ReleaseInfo(repository, commit, tag, page_url, tuple(assets), version)
-
-
-def release_relation(repository: str, current_commit: str, latest_commit: str) -> str:
-    if current_commit == latest_commit:
-        return "identical"
-    endpoint = "https://api.github.com/repos/{}/compare/{}...{}".format(
-        quote(repository, safe="/"),
-        quote(current_commit, safe=""),
-        quote(latest_commit, safe=""),
-    )
-    status = _read_json(endpoint).get("status")
-    if status not in {"ahead", "behind", "diverged", "identical"}:
-        raise AgentBoxError("The AgentBox release service returned an invalid commit relation")
-    return str(status)
+    return ReleaseInfo(repository, commit, tag, page_url, version)
 
 
 def _cache_path() -> Path:
@@ -449,7 +333,7 @@ def _cached_release(
     current_version: str | None,
     current_commit: str | None,
     allow_expired: bool = False,
-) -> tuple[ReleaseInfo, str | None] | None:
+) -> ReleaseInfo | None:
     path = _cache_path()
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -477,48 +361,19 @@ def _cached_release(
         commit = release_value.get("commit")
         tag = release_value.get("tag")
         page_url = release_value.get("page_url")
-        asset_values = release_value.get("assets")
         if (
             release_version is None
             or _full_commit(commit) is None
             or tag != "v{}".format(release_version)
             or not _valid_release_page(repository, tag, page_url)
-            or not isinstance(asset_values, list)
         ):
             return None
-        assets = []
-        names = set()
-        for item in asset_values:
-            if not isinstance(item, dict):
-                return None
-            name = item.get("name")
-            url = item.get("url")
-            if not isinstance(name, str) or not isinstance(url, str):
-                return None
-            asset = ReleaseAsset(name, url)
-            if asset.name in names or not _valid_release_asset(repository, tag, asset):
-                return None
-            names.add(asset.name)
-            assets.append(asset)
-        relation = value.get("relation")
-        if relation not in {None, "ahead", "behind", "diverged", "identical"}:
-            return None
-        if current_commit is None and relation is not None:
-            return None
-        if current_commit is not None and relation is None:
-            return None
-        if (current_commit == commit) != (relation == "identical"):
-            return None
-        return (
-            ReleaseInfo(
-                repository,
-                commit,
-                tag,
-                page_url,
-                tuple(assets),
-                release_version,
-            ),
-            relation,
+        return ReleaseInfo(
+            repository,
+            commit,
+            tag,
+            page_url,
+            release_version,
         )
     except (OSError, AttributeError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         return None
@@ -528,7 +383,6 @@ def _store_cached_release(
     release: ReleaseInfo,
     current_version: str | None,
     current_commit: str | None,
-    relation: str | None,
 ) -> None:
     path = _cache_path()
     try:
@@ -544,13 +398,11 @@ def _store_cached_release(
                     "repository": release.repository,
                     "current_version": current_version,
                     "current_commit": current_commit,
-                    "relation": relation,
                     "release": {
                         "version": release.version,
                         "commit": release.commit,
                         "tag": release.tag,
                         "page_url": release.page_url,
-                        "assets": [asdict(asset) for asset in release.assets],
                     },
                 },
                 indent=2,
@@ -629,37 +481,13 @@ def _store_failure(
         return
 
 
-def _update_result_path() -> Path:
-    return user_state_root() / "updates/last-result.json"
-
-
-def _consume_update_warning() -> str | None:
-    path = _update_result_path()
-    try:
-        value = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    try:
-        path.unlink()
-    except OSError:
-        pass
-    if isinstance(value, dict) and value.get("status") == "failed" and isinstance(
-        value.get("message"), str
-    ):
-        return "The previous Windows update failed: {}".format(value["message"])
-    return None
-
-
 def _release_status(
     repository: str,
     current_version: str | None,
     current_commit: str | None,
     release: ReleaseInfo,
-    relation: str | None,
-    target: str | None,
     channel: str | None,
     command: str | None,
-    warning: str | None,
     *,
     stale: bool = False,
 ) -> UpdateStatus:
@@ -667,34 +495,23 @@ def _release_status(
         version_relation(current_version, release.version) if current_version else None
     )
     available = semantic_relation == "newer" if semantic_relation is not None else None
-    can_self_update = (
-        bool(getattr(sys, "frozen", False))
-        and target is not None
-        and channel is None
-        and semantic_relation == "newer"
-        and relation == "ahead"
-    )
     return UpdateStatus(
         repository,
         current_commit,
         release.commit,
         release.page_url,
         available,
-        can_self_update,
-        target,
-        relation=relation,
         stale=stale,
-        warning=warning,
         current_version=current_version,
         latest_version=release.version,
         version_relation=semantic_relation,
         install_channel=channel,
         install_command=command,
+        standalone=bool(getattr(sys, "frozen", False)) and channel is None,
     )
 
 
 def check_for_updates(force: bool = False) -> UpdateStatus:
-    warning = _consume_update_warning()
     channel, command = _install_channel()
     if not force and os.environ.get("AGENTBOX_NO_UPDATE_CHECK", "").lower() in {
         "1",
@@ -709,16 +526,13 @@ def check_for_updates(force: bool = False) -> UpdateStatus:
             None,
             None,
             None,
-            False,
-            release_target(),
             disabled=True,
-            warning=warning,
             current_version=current_version,
             install_channel=channel,
             install_command=command,
+            standalone=bool(getattr(sys, "frozen", False)) and channel is None,
         )
     repository, current_version, current_commit = current_build()
-    target = release_target()
 
     def unavailable_status(error: str) -> UpdateStatus:
         return UpdateStatus(
@@ -727,13 +541,11 @@ def check_for_updates(force: bool = False) -> UpdateStatus:
             None,
             None,
             None,
-            False,
-            target,
             error=error,
-            warning=warning,
             current_version=current_version,
             install_channel=channel,
             install_command=command,
+            standalone=bool(getattr(sys, "frozen", False)) and channel is None,
         )
 
     cached = (
@@ -746,35 +558,26 @@ def check_for_updates(force: bool = False) -> UpdateStatus:
         if failure:
             stale = _cached_release(repository, current_version, current_commit, True)
             if stale is not None:
-                release, relation = stale
                 return _release_status(
                     repository,
                     current_version,
                     current_commit,
-                    release,
-                    relation,
-                    target,
+                    stale,
                     channel,
                     command,
-                    warning,
                     stale=True,
                 )
             return unavailable_status(failure)
     try:
         if cached is None:
             release = fetch_latest_release(repository)
-            relation = (
-                release_relation(repository, current_commit, release.commit)
-                if current_commit
-                else None
-            )
-            _store_cached_release(release, current_version, current_commit, relation)
+            _store_cached_release(release, current_version, current_commit)
             try:
                 _failure_cache_path().unlink(missing_ok=True)
             except OSError:
                 pass
         else:
-            release, relation = cached
+            release = cached
     except AgentBoxError as exc:
         stale = (
             None
@@ -783,17 +586,13 @@ def check_for_updates(force: bool = False) -> UpdateStatus:
         )
         if stale is not None:
             _store_failure(repository, current_version, current_commit, str(exc))
-            release, relation = stale
             return _release_status(
                 repository,
                 current_version,
                 current_commit,
-                release,
-                relation,
-                target,
+                stale,
                 channel,
                 command,
-                warning,
                 stale=True,
             )
         if not force:
@@ -804,355 +603,6 @@ def check_for_updates(force: bool = False) -> UpdateStatus:
         current_version,
         current_commit,
         release,
-        relation,
-        target,
         channel,
         command,
-        warning,
     )
-
-
-def _asset(release: ReleaseInfo, name: str) -> ReleaseAsset:
-    matches = [asset for asset in release.assets if asset.name == name]
-    if len(matches) != 1:
-        raise AgentBoxError("The latest release does not contain exactly one {}".format(name))
-    return matches[0]
-
-
-def _checksums(release: ReleaseInfo) -> dict[str, str]:
-    asset = _asset(release, "SHA256SUMS.txt")
-    try:
-        text = _read_url(asset.url).decode("ascii")
-    except UnicodeDecodeError as exc:
-        raise AgentBoxError("The release checksum file is invalid") from exc
-    checksums = {}
-    for line in text.splitlines():
-        fields = line.split()
-        if len(fields) != 2:
-            continue
-        digest, name = fields
-        name = name.lstrip("*")
-        if SHA256.fullmatch(digest) and Path(name).name == name:
-            if name in checksums:
-                raise AgentBoxError("The release checksum file contains duplicate entries")
-            checksums[name] = digest
-    return checksums
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def prepare_update_plan() -> UpdatePlan:
-    channel, command = _install_channel()
-    if channel is not None:
-        guidance = (
-            " Run `{}` instead.".format(command)
-            if command
-            else " Update it through that package manager instead."
-        )
-        raise AgentBoxError(
-            "This AgentBox installation is managed by {}; direct replacement is disabled.{}".format(
-                channel, guidance
-            )
-        )
-    if not getattr(sys, "frozen", False):
-        raise AgentBoxError(
-            "Automatic updates are available only for standalone AgentBox releases"
-        )
-    repository, current_version, current_commit = current_build()
-    if current_version is None:
-        raise AgentBoxError("This standalone build has no embedded semantic version")
-    if current_commit is None:
-        raise AgentBoxError("This standalone build has no embedded source commit")
-    target = release_target()
-    if target is None:
-        raise AgentBoxError("No automatic AgentBox update is published for this platform")
-    release = fetch_latest_release(repository)
-    semantic_relation = version_relation(current_version, release.version)
-    if semantic_relation == "same":
-        raise AgentBoxError("AgentBox is already up to date at v{}".format(current_version))
-    if semantic_relation == "older":
-        raise AgentBoxError(
-            "The latest release v{} is older than this AgentBox build v{}; semantic downgrade was refused".format(
-                release.version, current_version
-            )
-        )
-    relation = release_relation(repository, current_commit, release.commit)
-    if relation != "ahead":
-        raise AgentBoxError(
-            "The latest release commit is {} relative to this AgentBox build; automatic update was refused".format(
-                relation
-            )
-        )
-    extension = ".zip" if target == "windows-x86_64" else ".tar.gz"
-    archive_name = "agentbox-{}-{}{}".format(release.version, target, extension)
-    archive = _asset(release, archive_name)
-    checksum = _checksums(release).get(archive_name)
-    if checksum is None:
-        raise AgentBoxError("The latest release has no checksum for {}".format(archive_name))
-    executable = Path(sys.executable).resolve()
-    if not executable.is_file():
-        raise AgentBoxError("Cannot locate the running AgentBox executable")
-    return UpdatePlan(
-        repository,
-        current_commit,
-        release.commit,
-        release.page_url,
-        target,
-        archive_name,
-        archive.url,
-        checksum,
-        str(executable),
-        _file_sha256(executable),
-        current_version,
-        release.version,
-    )
-
-
-def _download_archive(plan: UpdatePlan, destination: Path) -> None:
-    digest = hashlib.sha256()
-    total = 0
-    try:
-        with urlopen(_request(plan.archive_url), timeout=NETWORK_TIMEOUT_SECONDS) as response:
-            declared = response.headers.get("Content-Length")
-            if declared and int(declared) > MAX_ARCHIVE_BYTES:
-                raise AgentBoxError("The AgentBox update archive is too large")
-            with destination.open("xb") as output:
-                while chunk := response.read(1024 * 1024):
-                    total += len(chunk)
-                    if total > MAX_ARCHIVE_BYTES:
-                        raise AgentBoxError("The AgentBox update archive is too large")
-                    digest.update(chunk)
-                    output.write(chunk)
-                output.flush()
-                os.fsync(output.fileno())
-    except (HTTPError, URLError, OSError, ValueError) as exc:
-        raise AgentBoxError("Cannot download the AgentBox update: {}".format(exc))
-    if digest.hexdigest() != plan.archive_sha256:
-        raise AgentBoxError("The AgentBox update archive failed SHA-256 verification")
-
-
-def _archive_member(plan: UpdatePlan) -> str:
-    executable = "agentbox.exe" if plan.target == "windows-x86_64" else "agentbox"
-    if plan.archive_name.endswith(".tar.gz"):
-        archive_root = plan.archive_name.removesuffix(".tar.gz")
-    elif plan.archive_name.endswith(".zip"):
-        archive_root = plan.archive_name.removesuffix(".zip")
-    else:
-        raise AgentBoxError("The update archive has an invalid filename")
-    return "{}/{}".format(archive_root, executable)
-
-
-def _copy_limited(source: object, destination: object, size: int) -> None:
-    if size < 1 or size > MAX_EXECUTABLE_BYTES:
-        raise AgentBoxError("The executable in the update archive has an invalid size")
-    remaining = size
-    while remaining:
-        chunk = source.read(min(1024 * 1024, remaining))
-        if not chunk:
-            raise AgentBoxError("The executable in the update archive is truncated")
-        destination.write(chunk)
-        remaining -= len(chunk)
-    if source.read(1):
-        raise AgentBoxError("The executable in the update archive exceeded its declared size")
-
-
-def _stage_executable(plan: UpdatePlan, archive_path: Path) -> Path:
-    target = Path(plan.executable_path)
-    if not target.is_file() or target.is_symlink():
-        raise AgentBoxError("The running AgentBox executable is no longer a regular file")
-    if _file_sha256(target) != plan.executable_sha256:
-        raise AgentBoxError("The AgentBox executable changed after the update was reviewed")
-    staged = target.with_name(".{}.update-{}".format(target.name, uuid.uuid4().hex))
-    member_name = _archive_member(plan)
-    completed = False
-    try:
-        descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
-        with os.fdopen(descriptor, "wb") as destination:
-            if plan.archive_name.endswith(".zip"):
-                with zipfile.ZipFile(archive_path) as archive:
-                    matches = [item for item in archive.infolist() if item.filename == member_name]
-                    if len(matches) != 1 or matches[0].is_dir():
-                        raise AgentBoxError("The update archive has no unique AgentBox executable")
-                    with archive.open(matches[0]) as source:
-                        _copy_limited(source, destination, matches[0].file_size)
-            else:
-                with tarfile.open(archive_path, mode="r:gz") as archive:
-                    matches = [item for item in archive.getmembers() if item.name == member_name]
-                    if len(matches) != 1 or not matches[0].isfile():
-                        raise AgentBoxError("The update archive has no unique AgentBox executable")
-                    source = archive.extractfile(matches[0])
-                    if source is None:
-                        raise AgentBoxError("Cannot read the AgentBox executable from the update")
-                    with source:
-                        _copy_limited(source, destination, matches[0].size)
-            destination.flush()
-            os.fsync(destination.fileno())
-        if os.name != "nt":
-            staged.chmod(stat.S_IMODE(target.stat().st_mode) | stat.S_IXUSR)
-        completed = True
-        return staged
-    except (OSError, tarfile.TarError, zipfile.BadZipFile) as exc:
-        raise AgentBoxError("Cannot stage the AgentBox update: {}".format(exc))
-    finally:
-        if not completed:
-            staged.unlink(missing_ok=True)
-
-
-def _reserve_windows_update(target: Path) -> Path:
-    marker = target.with_name(".{}.update-pending".format(target.name))
-    try:
-        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        try:
-            age = time.time() - marker.stat().st_mtime
-        except OSError as exc:
-            raise AgentBoxError("Cannot inspect the pending Windows update: {}".format(exc))
-        if age <= 60 * 60:
-            raise AgentBoxError("Another AgentBox update is already pending")
-        try:
-            marker.unlink()
-            descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except OSError as exc:
-            raise AgentBoxError("Cannot clear the stale Windows update marker: {}".format(exc))
-    except OSError as exc:
-        raise AgentBoxError("Cannot reserve the AgentBox executable for update: {}".format(exc))
-    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-        output.write("{}\n".format(os.getpid()))
-        output.flush()
-        os.fsync(output.fileno())
-    return marker
-
-
-def _schedule_windows_replacement(
-    target: Path, staged: Path, marker: Path, expected_sha256: str
-) -> None:
-    script_root = user_state_root() / "updates"
-    script = script_root / "apply-{}.ps1".format(uuid.uuid4().hex)
-    result = _update_result_path()
-    try:
-        script_root.mkdir(parents=True, exist_ok=True)
-        script.write_text(
-            "$ErrorActionPreference = 'Stop'\n"
-            "try {\n"
-            "  Wait-Process -Id ([int]$env:AGENTBOX_UPDATE_PID) -ErrorAction SilentlyContinue\n"
-            "  $actual = (Get-FileHash -LiteralPath $env:AGENTBOX_UPDATE_TARGET "
-            "-Algorithm SHA256).Hash.ToLowerInvariant()\n"
-            "  if ($actual -ne $env:AGENTBOX_UPDATE_EXPECTED_SHA256) {\n"
-            "    throw 'The AgentBox executable changed while the update was pending'\n"
-            "  }\n"
-            "  [System.IO.File]::Replace($env:AGENTBOX_UPDATE_REPLACEMENT, "
-            "$env:AGENTBOX_UPDATE_TARGET, $null)\n"
-            "  @{ status = 'ok' } | ConvertTo-Json | Set-Content -LiteralPath "
-            "$env:AGENTBOX_UPDATE_RESULT -Encoding UTF8\n"
-            "} catch {\n"
-            "  @{ status = 'failed'; message = $_.Exception.Message } | ConvertTo-Json | "
-            "Set-Content -LiteralPath $env:AGENTBOX_UPDATE_RESULT -Encoding UTF8\n"
-            "  Remove-Item -LiteralPath $env:AGENTBOX_UPDATE_REPLACEMENT -Force "
-            "-ErrorAction SilentlyContinue\n"
-            "} finally {\n"
-            "  Remove-Item -LiteralPath $env:AGENTBOX_UPDATE_MARKER -Force "
-            "-ErrorAction SilentlyContinue\n"
-            "  Remove-Item -LiteralPath $env:AGENTBOX_UPDATE_SCRIPT -Force "
-            "-ErrorAction SilentlyContinue\n"
-            "}\n",
-            encoding="utf-8",
-        )
-    except OSError as exc:
-        for path in (script, marker):
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        raise AgentBoxError("Cannot prepare the Windows update helper: {}".format(exc))
-    with external_program_environment() as environment:
-        powershell = shutil.which("powershell.exe", path=environment.get("PATH"))
-        if powershell is None:
-            script.unlink(missing_ok=True)
-            marker.unlink(missing_ok=True)
-            raise AgentBoxError("Windows PowerShell is required to finish this update")
-        environment.update(
-            {
-                "AGENTBOX_UPDATE_PID": str(os.getpid()),
-                "AGENTBOX_UPDATE_TARGET": str(target),
-                "AGENTBOX_UPDATE_REPLACEMENT": str(staged),
-                "AGENTBOX_UPDATE_EXPECTED_SHA256": expected_sha256,
-                "AGENTBOX_UPDATE_MARKER": str(marker),
-                "AGENTBOX_UPDATE_RESULT": str(result),
-                "AGENTBOX_UPDATE_SCRIPT": str(script),
-            }
-        )
-        try:
-            subprocess.Popen(
-                [
-                    powershell,
-                    "-NoLogo",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    str(script),
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-                env=environment,
-                creationflags=(
-                    subprocess.DETACHED_PROCESS
-                    | subprocess.CREATE_NEW_PROCESS_GROUP
-                    | subprocess.CREATE_NO_WINDOW
-                ),
-            )
-        except OSError as exc:
-            script.unlink(missing_ok=True)
-            marker.unlink(missing_ok=True)
-            raise AgentBoxError("Cannot start the Windows update helper: {}".format(exc))
-
-
-def install_update(reviewed: UpdatePlan) -> UpdateResult:
-    target = Path(reviewed.executable_path)
-    with operation_guard(application_lock_identity(), target):
-        current = prepare_update_plan()
-        if current.identity() != reviewed.identity():
-            raise AgentBoxError("The available update changed; review it again before installing")
-        with tempfile.TemporaryDirectory(prefix="agentbox-update-") as temporary:
-            archive = Path(temporary) / reviewed.archive_name
-            _download_archive(reviewed, archive)
-            staged = _stage_executable(reviewed, archive)
-        keep_staged = False
-        try:
-            if os.name == "nt":
-                marker = _reserve_windows_update(target)
-                _schedule_windows_replacement(
-                    target, staged, marker, reviewed.executable_sha256
-                )
-                keep_staged = True
-                return UpdateResult(
-                    "Update verified and scheduled. AgentBox will stop so Windows can replace the executable.",
-                    True,
-                )
-            if (
-                not target.is_file()
-                or target.is_symlink()
-                or _file_sha256(target) != reviewed.executable_sha256
-            ):
-                raise AgentBoxError(
-                    "The AgentBox executable changed while the update was being staged"
-                )
-            os.replace(staged, target)
-            return UpdateResult(
-                "Update verified and installed. Restart AgentBox to run the new build.",
-                True,
-            )
-        except OSError as exc:
-            raise AgentBoxError("Cannot replace the AgentBox executable: {}".format(exc))
-        finally:
-            if not keep_staged and staged.exists():
-                staged.unlink()

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .core import AgentBoxError, OperationRequest, managed_provider_ids, run_operation
 from .paths import default_config_path
-from .update import check_for_updates, current_build, install_update, prepare_update_plan
+from .update import check_for_updates, current_build
 
 
 class BuildVersionAction(argparse.Action):
@@ -94,8 +94,6 @@ def parse_args(
     storage.add_argument("--git", dest="storage_git", help="managed Git repository URL")
     storage.add_argument("--dry-run", action="store_true")
 
-    subparsers.add_parser("update", help="check for and install the latest AgentBox release")
-
     ui = subparsers.add_parser("ui", help="open the local browser interface")
     ui.add_argument("--bind", default="127.0.0.1", choices=["127.0.0.1", "localhost"])
     ui.add_argument("--port", type=int, default=8765)
@@ -105,96 +103,27 @@ def parse_args(
 
 def announce_available_update() -> None:
     status = check_for_updates()
-    if status.warning:
-        print("warning: {}".format(status.warning), file=sys.stderr)
     if status.stale:
         print("warning: update status is from the last successful check", file=sys.stderr)
     if status.update_available:
-        guidance = (
-            "run '{}'".format(status.install_command)
-            if status.install_command
-            else "update through {}".format(status.install_channel)
-            if status.install_channel
-            else "run 'agentbox update'"
-        )
+        if status.install_command:
+            guidance = "run '{}'".format(status.install_command)
+        elif status.install_channel:
+            guidance = "update through {}".format(status.install_channel)
+        elif status.standalone and status.release_url:
+            guidance = "download it manually from {}".format(status.release_url)
+        elif status.release_url:
+            guidance = "update the installation manually; release: {}".format(
+                status.release_url
+            )
+        else:
+            guidance = "update the installation manually"
         print(
             "update available: AgentBox {} is available (commit {}); {}".format(
                 status.latest_label, status.latest_commit_label, guidance
             ),
             file=sys.stderr,
         )
-
-
-def run_update() -> int:
-    status = check_for_updates(force=True)
-    if status.warning:
-        print("warning: {}".format(status.warning), file=sys.stderr)
-    if status.error:
-        raise AgentBoxError(status.error)
-    if status.version_relation == "older":
-        print(
-            "Latest AgentBox release {} is older than this installation {}; "
-            "semantic downgrade was refused.".format(
-                status.latest_label, status.current_label
-            )
-        )
-        return 0
-    if status.update_available is False:
-        print(
-            "AgentBox is up to date at {} (commit {}).".format(
-                status.current_label, status.current_commit_label
-            )
-        )
-        return 0
-    if status.install_channel:
-        print(
-            "Latest AgentBox release: {} (commit {}).".format(
-                status.latest_label, status.latest_commit_label
-            )
-        )
-        if status.install_command:
-            print(
-                "This installation is managed by {}. Run '{}' to update it.".format(
-                    status.install_channel, status.install_command
-                )
-            )
-        else:
-            print(
-                "This installation is managed by {}. Update it through that installation channel; "
-                "direct replacement is disabled.".format(status.install_channel)
-            )
-        return 0
-    if status.update_available and status.relation in {"behind", "diverged", "identical"}:
-        print(
-            "AgentBox {} is available, but its commit is {} relative to this build; "
-            "automatic update was refused.".format(status.latest_label, status.relation)
-        )
-        return 0
-    if not status.can_self_update:
-        if status.latest_version:
-            print(
-                "Latest AgentBox release: {} (commit {}).".format(
-                    status.latest_label, status.latest_commit_label
-                )
-            )
-        print(
-            "Automatic updates are available only for standalone releases. "
-            "Update the source checkout or Python installation using the same method "
-            "that installed it."
-        )
-        return 0
-    plan = prepare_update_plan()
-    print(
-        "Updating AgentBox from v{} (commit {}) to v{} (commit {})...".format(
-            plan.current_version,
-            plan.current_commit[:12],
-            plan.latest_version,
-            plan.latest_commit[:12],
-        )
-    )
-    result = install_update(plan)
-    print(result.message)
-    return 0
 
 
 def main(
@@ -208,12 +137,6 @@ def main(
     bootstrap_args, _ = bootstrap.parse_known_args(arguments)
     config_path = Path(bootstrap_args.config).expanduser().resolve()
     args = parse_args(managed_provider_ids(), default_config, arguments)
-
-    if args.action == "update":
-        return run_update()
-
-    if args.action != "ui":
-        announce_available_update()
 
     if args.action == "ui":
         from .web import run_browser
@@ -242,6 +165,7 @@ def main(
         storage_git=getattr(args, "storage_git", None),
     )
     run_operation(config_path, request)
+    announce_available_update()
     return 0
 
 

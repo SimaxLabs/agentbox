@@ -52,26 +52,16 @@ code, .path, .eyebrow, .kicker, .kind-tag, .status-pill, .safety-note, .running-
 .host-picker select { margin-top: 4px; border: 0; background: transparent; color: var(--ink); font-weight: 750; }
 
 .update-awareness { border-bottom: 1px solid var(--ink); background: var(--white); }
-.update-bar, .update-review { display: flex; width: min(1480px, 100%); min-height: 58px; align-items: center; justify-content: space-between; gap: 24px; margin: 0 auto; padding: 10px 36px; }
+.update-bar { display: flex; width: min(1480px, 100%); min-height: 58px; align-items: center; justify-content: space-between; gap: 24px; margin: 0 auto; padding: 10px 36px; }
 .update-bar > div:first-child { display: flex; align-items: baseline; gap: 14px; }
 .update-bar span, .update-bar small, .manual-update span, .manual-update small { font-size: 0.68rem; }
 .update-bar small, .manual-update small { color: var(--ink-soft); }
 .update-bar code { font-size: 0.66rem; }
 .update-bar.available { background: var(--acid); }
-.update-bar.available .eyebrow, .update-bar.installed .eyebrow, .update-bar.failed .eyebrow { color: var(--ink); }
+.update-bar.available .eyebrow { color: var(--ink); }
 .update-bar.current, .update-bar.quiet { min-height: 42px; color: var(--ink-soft); }
-.update-bar.installed { background: var(--acid); }
-.update-bar.failed { background: #f5c8ba; }
 .manual-update { display: grid; max-width: 430px; gap: 3px; text-align: right; }
 .manual-update span { font-weight: 800; text-transform: uppercase; }
-.update-action { display: flex; min-width: 180px; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid var(--ink); padding: 10px 13px; background: var(--ink); color: var(--white); font-weight: 800; }
-.update-action:hover { background: var(--orange); }
-.update-action.confirm { background: var(--acid); color: var(--ink); }
-.update-review { align-items: flex-end; padding-top: 20px; padding-bottom: 20px; background: #101a19; color: var(--white); }
-.update-review h2 { margin: 3px 0 7px; font-family: Georgia, serif; font-size: 1.45rem; font-weight: 500; }
-.update-review p { max-width: 920px; margin: 0; color: #b8c2be; font-size: 0.72rem; line-height: 1.5; }
-.update-review .eyebrow { color: var(--acid); }
-.update-review code { color: var(--white); }
 
 main { width: min(1480px, 100%); margin: 0 auto; padding: 0 36px 56px; }
 .hero { display: grid; grid-template-columns: 1.35fr 0.65fr; align-items: end; gap: 48px; padding: 92px 0 72px; border-bottom: 1px solid var(--ink); }
@@ -312,10 +302,9 @@ footer a { color: var(--ink); font-weight: 750; }
   .brand { padding: 10px 14px; }
   .brand small { display: none; }
   .host-picker { min-width: 150px; padding: 8px 12px; }
-  .update-bar, .update-review { align-items: stretch; flex-direction: column; gap: 10px; padding: 12px 16px; }
+  .update-bar { align-items: stretch; flex-direction: column; gap: 10px; padding: 12px 16px; }
   .update-bar > div:first-child { align-items: flex-start; flex-direction: column; gap: 3px; }
   .manual-update { text-align: left; }
-  .update-action { width: 100%; }
   main { padding: 0 16px 36px; }
   .hero { padding: 52px 0; }
   .hero-side { grid-template-columns: 1fr; }
