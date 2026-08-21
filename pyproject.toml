@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentbox-workbench"
-version = "0.1.0"
+version = "0.1.1"
 description = "A local-first catalog for backing up and restoring AI coding-agent resources."
 readme = "README.md"
 license = "GPL-3.0-only"

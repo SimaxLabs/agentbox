@@ -18,9 +18,12 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
+import time
 import zlib
+from http.client import HTTPException
 from importlib.metadata import Distribution, distributions
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import urlopen
 from xml.parsers import expat
@@ -69,6 +72,42 @@ UBUNTU_COMPONENT_LICENSES = {
     "GCC runtime": "GPL-3.0-or-later WITH GCC-exception-3.1",
     "libedit": "BSD-3-Clause",
 }
+
+LAUNCHPAD_ATTEMPTS = 4
+LAUNCHPAD_TIMEOUT_SECONDS = 30
+
+
+def launchpad_json(url: str) -> object:
+    for attempt in range(1, LAUNCHPAD_ATTEMPTS + 1):
+        try:
+            with urlopen(url, timeout=LAUNCHPAD_TIMEOUT_SECONDS) as response:
+                return json.load(response)
+        except HTTPError as exc:
+            retryable = exc.code in {408, 425, 429} or 500 <= exc.code < 600
+            if not retryable:
+                raise RuntimeError(f"Launchpad request failed with HTTP {exc.code}: {url}") from exc
+            error: Exception = exc
+        except (
+            HTTPException,
+            URLError,
+            TimeoutError,
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as exc:
+            error = exc
+        if attempt == LAUNCHPAD_ATTEMPTS:
+            raise RuntimeError(
+                f"Launchpad request failed after {LAUNCHPAD_ATTEMPTS} attempts: {url}"
+            ) from error
+        delay = 2 ** (attempt - 1)
+        print(
+            f"warning: Launchpad request attempt {attempt}/{LAUNCHPAD_ATTEMPTS} failed: "
+            f"{error}; retrying in {delay}s",
+            file=sys.stderr,
+        )
+        time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def binary_version(path: Path, symbol: str) -> str:
@@ -165,8 +204,10 @@ def launchpad_source_files(source_package: str, source_version: str) -> list[dic
             "exact_match": "true",
         }
     )
-    with urlopen(f"{archive_url}?{query}", timeout=30) as response:
-        publications = json.load(response).get("entries", [])
+    publications = launchpad_json(f"{archive_url}?{query}")
+    if not isinstance(publications, dict):
+        raise RuntimeError("Invalid Launchpad source publication response")
+    publications = publications.get("entries", [])
     matching = [
         item
         for item in publications
@@ -178,9 +219,15 @@ def launchpad_source_files(source_package: str, source_version: str) -> list[dic
             f"Cannot find published Ubuntu {codename} source {source_package}={source_version}"
         )
     files_query = urlencode({"ws.op": "sourceFileUrls", "include_meta": "true"})
-    with urlopen(f"{matching[0]['self_link']}?{files_query}", timeout=30) as response:
-        files = json.load(response)
-    if not files or not all(item.get("url") and item.get("sha256") for item in files):
+    files = launchpad_json(f"{matching[0]['self_link']}?{files_query}")
+    if (
+        not isinstance(files, list)
+        or not files
+        or not all(
+            isinstance(item, dict) and item.get("url") and item.get("sha256")
+            for item in files
+        )
+    ):
         raise RuntimeError(
             f"Incomplete Launchpad source metadata for {source_package}={source_version}"
         )

@@ -48,6 +48,64 @@ class NativeReleaseMetadataTest(unittest.TestCase):
         self.assertIn("source_name=readline", first_url)
         self.assertIn("version=8.1.2-1", first_url)
 
+    def test_launchpad_source_files_retry_a_read_timeout(self):
+        publications = {
+            "entries": [
+                {
+                    "distro_series_link": "https://api.launchpad.net/1.0/ubuntu/jammy",
+                    "self_link": "https://api.launchpad.net/1.0/source-publication",
+                    "status": "Published",
+                }
+            ]
+        }
+        source_files = [
+            {
+                "url": "https://launchpad.net/readline_8.1.2-1.dsc",
+                "sha256": "a" * 64,
+                "size": 123,
+            }
+        ]
+        responses = [
+            io.BytesIO(json.dumps(publications).encode()),
+            TimeoutError("read timed out"),
+            io.BytesIO(json.dumps(source_files).encode()),
+        ]
+
+        with patch.object(
+            bundle_native_metadata.platform,
+            "freedesktop_os_release",
+            return_value={"ID": "ubuntu", "VERSION_CODENAME": "jammy"},
+        ), patch.object(
+            bundle_native_metadata, "urlopen", side_effect=responses
+        ) as mocked_urlopen, patch.object(
+            bundle_native_metadata.time, "sleep"
+        ) as mocked_sleep:
+            records = bundle_native_metadata.launchpad_source_files(
+                "readline", "8.1.2-1"
+            )
+
+        self.assertEqual("readline_8.1.2-1.dsc", records[0]["filename"])
+        self.assertEqual(3, mocked_urlopen.call_count)
+        mocked_sleep.assert_called_once_with(1)
+
+    def test_launchpad_source_files_stop_after_bounded_timeouts(self):
+        with patch.object(
+            bundle_native_metadata.platform,
+            "freedesktop_os_release",
+            return_value={"ID": "ubuntu", "VERSION_CODENAME": "jammy"},
+        ), patch.object(
+            bundle_native_metadata,
+            "urlopen",
+            side_effect=TimeoutError("read timed out"),
+        ) as mocked_urlopen, patch.object(
+            bundle_native_metadata.time, "sleep"
+        ) as mocked_sleep:
+            with self.assertRaisesRegex(RuntimeError, "failed after 4 attempts"):
+                bundle_native_metadata.launchpad_source_files("readline", "8.1.2-1")
+
+        self.assertEqual(4, mocked_urlopen.call_count)
+        self.assertEqual(3, mocked_sleep.call_count)
+
     def test_ubuntu_owner_fallback_still_requires_the_exact_file(self):
         path = Path("/usr/lib/x86_64-linux-gnu/libgcc_s.so.1")
         outputs = [
