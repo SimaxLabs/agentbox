@@ -1,9 +1,6 @@
 <div class="preview-card">
   <div class="preview-header">
-    <div>
-      <p class="kicker">Dry run complete</p>
-      <h3>{{ operation_label }}</h3>
-    </div>
+    <div class="preview-title"><span class="status-orb"><i></i></span><div><p class="kicker">Dry run complete</p><h3>{{ operation_label }}</h3></div></div>
     <span class="change-count"><strong>{{ changes }}</strong> proposed change{% if changes != 1 %}s{% endif %}</span>
   </div>
 
@@ -33,7 +30,7 @@
   <form method="post" action="/operations/execute" hx-post="/operations/execute" hx-target="#operation-panel" hx-swap="innerHTML" data-async-form class="confirm-row">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="preview_token" value="{{ preview_token }}">
-    <p>The operation will be preflighted again against the current filesystem.</p>
-    <button type="submit" class="confirm-action">Confirm and execute</button>
+    <p>AgentBox will check the current filesystem once more before making these changes.</p>
+    <button type="submit" class="confirm-action">Confirm and run</button>
   </form>
 </div>

@@ -114,6 +114,19 @@ class AgentBoxWebTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("htmx:beforeSwap", script.text)
         self.assertIn("event.detail.shouldSwap = true", script.text)
 
+        for provider in ("claude", "codex", "opencode"):
+            with self.subTest(provider=provider):
+                provider_logo = await self.client.get(
+                    "/static/provider-{}.svg".format(provider)
+                )
+                self.assertEqual(200, provider_logo.status_code)
+                self.assertEqual("image/svg+xml", provider_logo.headers["content-type"])
+                self.assertTrue(provider_logo.text.startswith("<svg"))
+
+        self.assertIn('src="/static/provider-opencode.svg"', page.text)
+        self.assertIn("Workspace operations", page.text)
+        self.assertNotIn("Your AI workspace, kept safe", page.text)
+
     async def test_preview_does_not_write_and_confirmed_job_streams_events(self):
         self.add_command()
 
@@ -375,7 +388,7 @@ class AgentBoxWebTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0o600, self.config.stat().st_mode & 0o777)
 
         dashboard = await client.get("/")
-        self.assertIn("Provider overview", dashboard.text)
+        self.assertIn("Your workspace status", dashboard.text)
 
     async def test_onboarding_stops_if_config_parent_is_redirected(self):
         config = self.root / "missing-settings/config.json"

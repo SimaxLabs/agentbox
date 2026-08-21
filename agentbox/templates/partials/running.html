@@ -1,9 +1,6 @@
 <div class="running-card" data-operation-job data-job-id="{{ job_id }}" data-csrf-token="{{ csrf_token }}" data-host="{{ selected_host }}" data-reload-page="{{ 'true' if reload_page else 'false' }}">
   <div class="running-header">
-    <div>
-      <p class="kicker">Live operation</p>
-      <h3>{{ operation_label }}</h3>
-    </div>
+    <div class="preview-title"><span class="status-orb"><i></i></span><div><p class="kicker">Live operation</p><h3>{{ operation_label }}</h3></div></div>
     <span class="running-state"><i></i> Running</span>
   </div>
   <div class="event-log live-log" data-live-log>

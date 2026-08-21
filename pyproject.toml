@@ -45,6 +45,7 @@ agentbox = [
   "static/*.css",
   "static/*.js",
   "static/*.png",
+  "static/*.svg",
   "static/*.webmanifest",
   "static/vendor/*.js",
   "static/vendor/*.md",

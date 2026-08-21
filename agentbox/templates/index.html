@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <meta name="theme-color" content="#162321">
+  <meta name="theme-color" content="#f6f5f1">
   <meta name="htmx-config" content='{"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"409","swap":true},{"code":"422","swap":true},{"code":"[45]..","swap":false}]}' type="application/json">
   <title>AgentBox Workbench</title>
   <link rel="icon" href="/static/logo.png" type="image/png">
@@ -16,26 +16,27 @@
 </head>
 <body>
   <header class="masthead">
-    <a class="brand" href="/?host={{ selected_host }}" aria-label="AgentBox dashboard">
-      <span class="brand-mark"><img src="/static/logo.png" alt=""></span>
-      <span>
-        <strong>AgentBox</strong>
-        <small>artifact workbench</small>
-      </span>
-    </a>
-    <div class="environment">
-      <div class="environment-item config-item">
-        <span class="eyebrow">Configuration</span>
-        <span class="path" title="{{ config_path }}">{{ config_path }}</span>
+    <div class="masthead-inner">
+      <a class="brand" href="/?host={{ selected_host }}" aria-label="AgentBox dashboard">
+        <img src="/static/logo.png" alt="">
+        <span><strong>AgentBox</strong><small>local workspace</small></span>
+      </a>
+      <nav class="primary-nav" aria-label="Workspace navigation">
+        <a href="#workbench">Actions</a>
+        <a href="#provider-overview">Status</a>
+        <a href="#inventory">Catalog</a>
+      </nav>
+      <div class="environment">
+        <span class="local-badge"><i></i> Local only</span>
+        <form method="get" action="/" class="host-picker" data-host-picker>
+          <label for="host">Workspace</label>
+          <select id="host" name="host">
+            {% for host in hosts %}
+            <option value="{{ host }}" {% if host == selected_host %}selected{% endif %}>{{ host }}</option>
+            {% endfor %}
+          </select>
+        </form>
       </div>
-      <form method="get" action="/" class="host-picker" data-host-picker>
-        <label for="host">Catalog host</label>
-        <select id="host" name="host">
-          {% for host in hosts %}
-          <option value="{{ host }}" {% if host == selected_host %}selected{% endif %}>{{ host }}</option>
-          {% endfor %}
-        </select>
-      </form>
     </div>
   </header>
 
@@ -44,56 +45,41 @@
   </section>
 
   <main>
-    <section class="hero hub-hero">
-      <div>
-        <p class="kicker">Local control plane</p>
-        <h1>One catalog.<br>Every agent.</h1>
-      </div>
-      <div class="hero-side">
-        <img class="hero-logo" src="/static/logo.png" alt="AgentBox backup toolkit">
-        <p class="hero-copy">Your provider map, resources, storage, and exact history stay under local control. Nothing executes until its dry run is reviewed.</p>
-      </div>
-    </section>
-
-    <section id="dashboard-shell" class="dashboard-shell" aria-live="polite">
-      {% include "partials/dashboard.html" %}
-    </section>
-
     <section class="workbench" id="workbench">
       <div class="section-heading">
         <div>
-          <p class="kicker">Operation builder</p>
-          <h2>Stage a change</h2>
+          <h1>Workspace operations</h1>
+          <p class="section-description">Choose an action, adjust its options, then review the complete dry run.</p>
         </div>
-        <span class="safety-note">Dry run required</span>
+        <span class="safety-note"><i></i> Preview required</span>
       </div>
 
       <div class="operation-grid">
-        <form class="operation-card backup-card" method="post" action="/operations/preview" hx-post="/operations/preview" hx-target="#operation-panel" hx-swap="innerHTML" data-async-form>
+        <form class="operation-card backup-card featured" method="post" action="/operations/preview" hx-post="/operations/preview" hx-target="#operation-panel" hx-swap="innerHTML" data-async-form>
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="action" value="backup">
           <input type="hidden" name="host" value="{{ selected_host }}">
-          <div class="operation-number">01</div>
           <div class="operation-title">
-            <p class="eyebrow">Source to catalog</p>
-            <h3>Backup</h3>
-            <p>Capture exact files, modes, and source locations under this host.</p>
+            <h3>Back up</h3>
           </div>
+          <p class="operation-description">Save the latest skills and commands from this machine.</p>
           <label>
-            Target tool
+            Target provider
             <select name="tool">
-              <option value="all">All configured tools</option>
+              <option value="all">All configured providers</option>
               {% for tool in tools %}<option value="{{ tool.id }}">{{ tool.name }}</option>{% endfor %}
             </select>
           </label>
-          <label class="check-row">
-            <input type="checkbox" name="prune">
-            <span><strong>Prune absent entries</strong><small>Remove catalog entries absent from available sources.</small></span>
-          </label>
-          <label class="check-row">
-            <input type="checkbox" name="include_derived">
-            <span><strong>Include edited restores</strong><small>Back up modified derived copies as independent artifacts.</small></span>
-          </label>
+          <div class="option-list">
+            <label class="check-row">
+              <input type="checkbox" name="prune">
+              <span><strong>Remove absent entries</strong><small>Prune catalog entries missing from available sources.</small></span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" name="include_derived">
+              <span><strong>Include edited restores</strong><small>Keep modified derived copies as independent artifacts.</small></span>
+            </label>
+          </div>
           <button type="submit" class="primary-action">Preview backup <span aria-hidden="true">-&gt;</span></button>
         </form>
 
@@ -101,17 +87,15 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="action" value="restore">
           <input type="hidden" name="host" value="{{ selected_host }}">
-          <div class="operation-number">02</div>
           <div class="operation-title">
-            <p class="eyebrow">Catalog to working copy</p>
             <h3>Restore</h3>
-            <p>Deploy portable skills or exact originals with safety snapshots.</p>
           </div>
+          <p class="operation-description">Bring back portable skills or exact originals with safety copies.</p>
           <div class="field-pair">
             <label>
-              Target tool
+              Target provider
               <select name="tool">
-                <option value="all">All configured tools</option>
+                <option value="all">All configured providers</option>
                 {% for tool in tools %}<option value="{{ tool.id }}" data-portable="{{ 'true' if tool.portable_target else 'false' }}">{{ tool.name }}</option>{% endfor %}
               </select>
             </label>
@@ -126,8 +110,8 @@
           <label>
             Catalog source
             <select name="source_mode" data-source-mode>
-              <option value="matching">Matching target tool</option>
-              <option value="all">Every tool catalog</option>
+              <option value="matching">Matching target provider</option>
+              <option value="all">Every provider catalog</option>
               {% for tool in tools %}<option value="tool:{{ tool.id }}">Only {{ tool.name }}</option>{% endfor %}
             </select>
           </label>
@@ -143,66 +127,72 @@
           <div class="check-grid">
             <label class="check-row compact">
               <input type="checkbox" name="all_hosts">
-              <span><strong>All hosts</strong><small>Read every host namespace.</small></span>
+              <span><strong>Search all hosts</strong><small>Read every host namespace.</small></span>
             </label>
             <label class="check-row compact">
               <input type="checkbox" name="force">
               <span><strong>Replace symlinks</strong><small>Allow explicitly unsafe targets.</small></span>
             </label>
           </div>
-          <button type="submit" class="primary-action">Preview restore <span aria-hidden="true">-&gt;</span></button>
+          <button type="submit" class="primary-action secondary">Preview restore <span aria-hidden="true">-&gt;</span></button>
         </form>
 
-        <form class="operation-card" method="post" action="/operations/preview" hx-post="/operations/preview" hx-target="#operation-panel" hx-swap="innerHTML" data-async-form>
+        <form class="operation-card storage-card" method="post" action="/operations/preview" hx-post="/operations/preview" hx-target="#operation-panel" hx-swap="innerHTML" data-async-form>
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="action" value="storage">
-          <div class="operation-number">03</div>
           <div class="operation-title">
-            <p class="eyebrow">Persistent destinations</p>
             <h3>Storage</h3>
-            <p>Keep a local catalog, a managed private Git repository, or both.</p>
           </div>
-          <label class="check-row">
-            <input type="checkbox" name="local_enabled" {% if local_storage_path %}checked{% endif %}>
-            <span><strong>Local copy</strong><small>Store a catalog in a directory outside the application checkout.</small></span>
-          </label>
-          <label>
-            Local catalog directory
-            <input type="text" name="storage_local" value="{{ local_storage_path or default_local_storage_path }}" autocomplete="off">
-          </label>
-          <label class="check-row">
-            <input type="checkbox" name="git_enabled" {% if git_storage_url %}checked{% endif %}>
-            <span><strong>Managed Git copy</strong><small>Fetch, commit, and push through the configured private repository.</small></span>
-          </label>
-          <label>
-            Git repository URL
-            <input type="text" name="storage_git" value="{{ git_storage_form_url }}" placeholder="git@github.com:owner/private-catalog.git" autocomplete="off" spellcheck="false">
-          </label>
-          <button type="submit" class="primary-action">Preview storage change <span aria-hidden="true">-&gt;</span></button>
+          <p class="operation-description">Choose where durable catalog copies are kept.</p>
+          <div class="storage-options">
+            <div>
+              <label class="check-row">
+                <input type="checkbox" name="local_enabled" {% if local_storage_path %}checked{% endif %}>
+                <span><strong>Local copy</strong><small>A folder, cloud drive, NAS, or synced directory.</small></span>
+              </label>
+              <label>Local catalog directory<input type="text" name="storage_local" value="{{ local_storage_path or default_local_storage_path }}" autocomplete="off"></label>
+            </div>
+            <div>
+              <label class="check-row">
+                <input type="checkbox" name="git_enabled" {% if git_storage_url %}checked{% endif %}>
+                <span><strong>Managed Git copy</strong><small>A private repository using your existing credentials.</small></span>
+              </label>
+              <label>Git repository URL<input type="text" name="storage_git" value="{{ git_storage_form_url }}" placeholder="git@github.com:owner/private-catalog.git" autocomplete="off" spellcheck="false"></label>
+            </div>
+          </div>
+          <button type="submit" class="primary-action quiet-action">Preview storage change <span aria-hidden="true">-&gt;</span></button>
         </form>
       </div>
 
       <div id="operation-panel" class="operation-panel" aria-live="polite">
         <div class="empty-panel">
-          <span class="empty-glyph">PREVIEW</span>
-          <p>Choose an operation. Its complete dry-run output will appear here before execution is enabled.</p>
+          <span class="empty-glyph"><i></i></span>
+          <div><strong>Ready when you are</strong><p>Your dry-run results will appear here. Nothing changes until you review and confirm.</p></div>
         </div>
       </div>
     </section>
 
-    <section class="paths-strip">
-      <div><span class="eyebrow">Storage</span><code>{{ storage_label }}</code></div>
-      {% if local_storage_path %}<div><span class="eyebrow">Local catalog</span><code>{{ local_storage_path }}</code></div>{% endif %}
-      {% if git_storage_url %}<div><span class="eyebrow">Git repository</span><code>{{ git_storage_url }}</code></div>{% endif %}
-      <div><span class="eyebrow">Active catalog</span><code>{{ catalog_path }}</code></div>
-      <div><span class="eyebrow">Deployment state</span><code>{{ state_path }}</code></div>
-      <div><span class="eyebrow">Safety copies</span><code>{{ safety_path }}</code></div>
+    <section id="dashboard-shell" class="dashboard-shell" aria-live="polite">
+      {% include "partials/dashboard.html" %}
     </section>
+
+    <details class="system-details">
+      <summary><span>System locations</span><small>Configuration, catalogs, state, and safety copies</small></summary>
+      <div class="paths-strip">
+        <div><span class="eyebrow">Configuration</span><code title="{{ config_path }}">{{ config_path }}</code></div>
+        <div><span class="eyebrow">Storage</span><code>{{ storage_label }}</code></div>
+        {% if local_storage_path %}<div><span class="eyebrow">Local catalog</span><code>{{ local_storage_path }}</code></div>{% endif %}
+        {% if git_storage_url %}<div><span class="eyebrow">Git repository</span><code>{{ git_storage_url }}</code></div>{% endif %}
+        <div><span class="eyebrow">Active catalog</span><code>{{ catalog_path }}</code></div>
+        <div><span class="eyebrow">Deployment state</span><code>{{ state_path }}</code></div>
+        <div><span class="eyebrow">Safety copies</span><code>{{ safety_path }}</code></div>
+      </div>
+    </details>
   </main>
 
   <footer>
-    <span>AgentBox runs entirely on this machine.</span>
-    <a href="#workbench">Stage operation</a>
+    <span><i></i> AgentBox runs entirely on this machine.</span>
+    <a href="#workbench">Back to actions</a>
   </footer>
 </body>
 </html>
