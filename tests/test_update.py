@@ -286,12 +286,15 @@ class AgentBoxUpdateTest(unittest.TestCase):
             git_commit.assert_not_called()
 
         with patch.object(sys, "frozen", False, create=True), patch(
+            "agentbox.update._source_project_version", return_value="2.3.4"
+        ) as source_version, patch(
             "agentbox.update._git_checkout_commit", return_value="d" * 40
         ), patch("agentbox.update.importlib.metadata.version") as package_version:
             repository, version, commit = current_build()
             self.assertEqual("SimaxLabs/agentbox", repository)
-            self.assertEqual("0.1.0", version)
+            self.assertEqual("2.3.4", version)
             self.assertEqual("d" * 40, commit)
+            source_version.assert_called_once_with()
             package_version.assert_not_called()
 
         with patch.object(sys, "frozen", False, create=True), patch(
