@@ -6,14 +6,19 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
+import agentbox.core as core_module
 from agentbox.core import (
     AgentBoxError,
     OperationRequest,
+    catalog_history_root,
     default_local_catalog,
     external_program_environment,
+    inspect_catalog_revision,
+    list_catalog_revisions,
     load_config,
     provider_detection,
     run_operation,
@@ -194,6 +199,410 @@ class AgentBoxTest(unittest.TestCase):
         )
         manifest = json.loads((self.catalog / "codex/manifest.json").read_text(encoding="utf-8"))
         self.assertEqual("codex-skills", manifest["artifacts"][0]["sources"][0]["id"])
+
+    def test_local_history_versions_and_restores_an_older_revision(self):
+        command, first_content = self.add_command(
+            "opencode_commands", body="Audit the first version"
+        )
+        self.run_cli("backup", "opencode")
+        first_revision = list_catalog_revisions(self.config)[0]
+
+        command.write_text(
+            first_content.replace("first version", "second version"), encoding="utf-8"
+        )
+        self.run_cli("backup", "opencode")
+        revisions = list_catalog_revisions(self.config)
+
+        self.assertEqual(2, len(revisions))
+        self.assertEqual(first_revision.revision_id, revisions[1].revision_id)
+        self.run_cli("backup", "opencode")
+        self.assertEqual(2, len(list_catalog_revisions(self.config)))
+        detail = inspect_catalog_revision(self.config, first_revision.revision_id)
+        self.assertEqual("audit", detail.artifacts[0]["name"])
+
+        history = self.run_cli("history")
+        self.assertIn(first_revision.revision_id, history.stdout)
+        inspected = self.run_cli("history", first_revision.revision_id)
+        self.assertIn("CATALOG test-host opencode command commands/audit.md", inspected.stdout)
+
+        current_catalog = self.catalog / "opencode/commands/audit.md"
+        second_catalog_content = current_catalog.read_text(encoding="utf-8")
+        self.run_cli(
+            "restore",
+            "opencode",
+            "--as-backed-up",
+            "--revision",
+            first_revision.revision_id,
+            "--dry-run",
+        )
+        self.assertIn("second version", command.read_text(encoding="utf-8"))
+
+        self.run_cli(
+            "restore",
+            "opencode",
+            "--as-backed-up",
+            "--revision",
+            first_revision.revision_id,
+        )
+        self.assertEqual(first_content, command.read_text(encoding="utf-8"))
+        self.assertEqual(second_catalog_content, current_catalog.read_text(encoding="utf-8"))
+
+        history_root = catalog_history_root(self.catalog_root)
+        objects = list((history_root / "objects").iterdir())
+        snapshots = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in (history_root / "snapshots").glob("*.json")
+        ]
+        file_entries = sum(
+            1
+            for snapshot in snapshots
+            for entry in snapshot["entries"]
+            if entry["kind"] == "file"
+        )
+        self.assertLess(len(objects), file_entries)
+
+    def test_local_history_dry_run_and_unchanged_backup_create_no_revision(self):
+        self.add_command("opencode_commands")
+
+        self.run_cli("backup", "opencode", "--dry-run")
+        self.assertEqual([], list_catalog_revisions(self.config))
+
+        self.run_cli("backup", "opencode")
+        self.run_cli("backup", "opencode")
+        self.assertEqual(1, len(list_catalog_revisions(self.config)))
+
+    def test_unchanged_catalog_still_applies_backup_state_updates(self):
+        def update_only_state(config, request, report, pre_apply):
+            config["_state_file"].parent.mkdir(parents=True, exist_ok=True)
+            config["_state_file"].write_text(
+                json.dumps({"version": 1, "deployments": {}, "updated": True}),
+                encoding="utf-8",
+            )
+            return 0
+
+        with patch("agentbox.core._run_catalog_operation", side_effect=update_only_state):
+            run_operation(
+                self.config,
+                OperationRequest("backup", tool="opencode", host="test-host"),
+                lambda event: None,
+            )
+
+        self.assertTrue(json.loads(self.state.read_text(encoding="utf-8"))["updated"])
+        self.assertEqual([], list_catalog_revisions(self.config))
+
+    def test_local_history_retention_removes_old_revisions(self):
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["history"] = {"max_revisions": 1}
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        command, content = self.add_command("opencode_commands", body="First")
+
+        self.run_cli("backup", "opencode")
+        first_revision = list_catalog_revisions(self.config)[0].revision_id
+        command.write_text(content.replace("First", "Second"), encoding="utf-8")
+        self.run_cli("backup", "opencode")
+
+        revisions = list_catalog_revisions(self.config)
+        self.assertEqual(1, len(revisions))
+        self.assertNotEqual(first_revision, revisions[0].revision_id)
+        self.assertEqual("audit", inspect_catalog_revision(self.config, revisions[0].revision_id).artifacts[0]["name"])
+        with self.assertRaisesRegex(AgentBoxError, "Unknown catalog revision"):
+            inspect_catalog_revision(self.config, first_revision)
+
+    def test_local_history_retention_keeps_new_revision_after_clock_rollback(self):
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["history"] = {"max_revisions": 1}
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        command, content = self.add_command("opencode_commands", body="First")
+
+        with patch("agentbox.core.datetime", wraps=datetime) as clock:
+            clock.now.return_value = datetime(2030, 1, 1, tzinfo=UTC)
+            run_operation(
+                self.config,
+                OperationRequest("backup", tool="opencode", host="test-host"),
+                lambda event: None,
+            )
+        command.write_text(content.replace("First", "Second"), encoding="utf-8")
+        with patch("agentbox.core.datetime", wraps=datetime) as clock:
+            clock.now.return_value = datetime(2029, 1, 1, tzinfo=UTC)
+            run_operation(
+                self.config,
+                OperationRequest("backup", tool="opencode", host="test-host"),
+                lambda event: None,
+            )
+
+        revisions = list_catalog_revisions(self.config)
+        self.assertEqual(1, len(revisions))
+        self.assertTrue(revisions[0].revision_id.startswith("20290101"))
+        self.assertIn(
+            "Second",
+            (self.catalog / "opencode/commands/audit.md").read_text(encoding="utf-8"),
+        )
+
+    def test_interrupted_history_publication_is_recovered(self):
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["history"] = {"max_revisions": 1}
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        command, content = self.add_command("opencode_commands", body="First")
+        self.run_cli("backup", "opencode")
+        first_revision = list_catalog_revisions(self.config)[0].revision_id
+        command.write_text(content.replace("First", "Second"), encoding="utf-8")
+
+        with patch(
+            "agentbox.core._publish_catalog_revision", side_effect=KeyboardInterrupt
+        ), self.assertRaises(KeyboardInterrupt):
+            run_operation(
+                self.config,
+                OperationRequest("backup", tool="opencode", host="test-host"),
+                lambda event: None,
+            )
+
+        self.assertIn(
+            "Second",
+            (self.catalog / "opencode/commands/audit.md").read_text(encoding="utf-8"),
+        )
+        revisions = list_catalog_revisions(self.config)
+        self.assertEqual(1, len(revisions))
+        self.assertNotEqual(first_revision, revisions[0].revision_id)
+        transactions = catalog_history_root(self.catalog_root) / "transactions"
+        self.assertEqual([], list(transactions.iterdir()))
+
+    def test_history_recovery_refuses_to_overwrite_newer_shared_state(self):
+        command, content = self.add_command("opencode_commands", body="First")
+        self.run_cli("backup", "opencode")
+        command.write_text(content.replace("First", "Second"), encoding="utf-8")
+        restore_snapshot = core_module._restore_file_snapshot
+        run_catalog_operation = core_module._run_catalog_operation
+
+        def update_catalog_and_state(config, request, report, pre_apply):
+            total = run_catalog_operation(config, request, report, pre_apply)
+            config["_state_file"].write_text(
+                json.dumps({"version": 1, "deployments": {}, "updated": True}),
+                encoding="utf-8",
+            )
+            return total
+
+        def interrupt_before_state_install(path, snapshot):
+            if path == self.state:
+                raise KeyboardInterrupt
+            restore_snapshot(path, snapshot)
+
+        with (
+            patch(
+                "agentbox.core._run_catalog_operation",
+                side_effect=update_catalog_and_state,
+            ),
+            patch(
+                "agentbox.core._restore_file_snapshot",
+                side_effect=interrupt_before_state_install,
+            ),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            run_operation(
+                self.config,
+                OperationRequest("backup", tool="opencode", host="test-host"),
+                lambda event: None,
+            )
+        self.state.parent.mkdir(parents=True, exist_ok=True)
+        newer_state = json.dumps(
+            {"version": 1, "deployments": {}, "other_configuration": True}
+        )
+        self.state.write_text(newer_state, encoding="utf-8")
+
+        with self.assertRaisesRegex(AgentBoxError, "refusing to overwrite"):
+            list_catalog_revisions(self.config)
+        self.assertEqual(newer_state, self.state.read_text(encoding="utf-8"))
+
+    def test_history_recovery_restores_state_after_interrupted_rollback(self):
+        command, content = self.add_command("opencode_commands", body="First")
+        self.run_cli("backup", "opencode")
+        command.write_text(content.replace("First", "Second"), encoding="utf-8")
+        restore_snapshot = core_module._restore_file_snapshot
+        run_catalog_operation = core_module._run_catalog_operation
+        state_installs = 0
+
+        def update_catalog_and_state(config, request, report, pre_apply):
+            total = run_catalog_operation(config, request, report, pre_apply)
+            config["_state_file"].write_text(
+                json.dumps({"version": 1, "deployments": {}, "updated": True}),
+                encoding="utf-8",
+            )
+            return total
+
+        def interrupt_state_rollback(path, snapshot):
+            nonlocal state_installs
+            if path == self.state:
+                state_installs += 1
+                if state_installs == 2:
+                    raise KeyboardInterrupt
+            restore_snapshot(path, snapshot)
+
+        with (
+            patch(
+                "agentbox.core._run_catalog_operation",
+                side_effect=update_catalog_and_state,
+            ),
+            patch(
+                "agentbox.core._restore_file_snapshot",
+                side_effect=interrupt_state_rollback,
+            ),
+            patch(
+                "agentbox.core._publish_catalog_revision",
+                side_effect=OSError("publish failed"),
+            ),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            run_operation(
+                self.config,
+                OperationRequest("backup", tool="opencode", host="test-host"),
+                lambda event: None,
+            )
+
+        self.assertIn(
+            "First",
+            (self.catalog / "opencode/commands/audit.md").read_text(encoding="utf-8"),
+        )
+        self.assertTrue(self.state.exists())
+        self.assertEqual(1, len(list_catalog_revisions(self.config)))
+        self.assertFalse(self.state.exists())
+
+    def test_interrupted_history_install_discards_pending_revision(self):
+        command, content = self.add_command("opencode_commands", body="First")
+        self.run_cli("backup", "opencode")
+        original_state = self.state.read_bytes() if self.state.exists() else None
+        command.write_text(content.replace("First", "Second"), encoding="utf-8")
+
+        def interrupt_during_copy(source, destination, token):
+            staged = destination.with_name(
+                ".{}.agentbox-new-{}".format(destination.name, token)
+            )
+            staged.mkdir()
+            (staged / "partial").write_text("incomplete", encoding="utf-8")
+            raise KeyboardInterrupt
+
+        with patch(
+            "agentbox.core.replace_catalog", side_effect=interrupt_during_copy
+        ), self.assertRaises(KeyboardInterrupt):
+            run_operation(
+                self.config,
+                OperationRequest("backup", tool="opencode", host="test-host"),
+                lambda event: None,
+            )
+
+        self.assertIn(
+            "First",
+            (self.catalog / "opencode/commands/audit.md").read_text(encoding="utf-8"),
+        )
+        current_state = self.state.read_bytes() if self.state.exists() else None
+        self.assertEqual(original_state, current_state)
+        self.assertEqual(1, len(list_catalog_revisions(self.config)))
+        transactions = catalog_history_root(self.catalog_root) / "transactions"
+        self.assertEqual([], list(transactions.iterdir()))
+
+    def test_interrupted_history_directory_swap_is_completed(self):
+        command, content = self.add_command("opencode_commands", body="First")
+        self.run_cli("backup", "opencode")
+        command.write_text(content.replace("First", "Second"), encoding="utf-8")
+
+        def interrupt_between_renames(source, destination, token):
+            previous = destination.with_name(
+                ".{}.agentbox-old-{}".format(destination.name, token)
+            )
+            staged = destination.with_name(
+                ".{}.agentbox-new-{}".format(destination.name, token)
+            )
+            shutil.copytree(source, staged)
+            destination.rename(previous)
+            raise KeyboardInterrupt
+
+        with patch(
+            "agentbox.core.replace_catalog", side_effect=interrupt_between_renames
+        ), self.assertRaises(KeyboardInterrupt):
+            run_operation(
+                self.config,
+                OperationRequest("backup", tool="opencode", host="test-host"),
+                lambda event: None,
+            )
+
+        self.assertFalse(self.catalog_root.exists())
+        revisions = list_catalog_revisions(self.config)
+        self.assertEqual(2, len(revisions))
+        self.assertIn(
+            "Second",
+            (self.catalog / "opencode/commands/audit.md").read_text(encoding="utf-8"),
+        )
+
+    def test_storage_change_recovers_pending_history_before_switching_roots(self):
+        command, content = self.add_command("opencode_commands", body="First")
+        self.run_cli("backup", "opencode")
+        command.write_text(content.replace("First", "Second"), encoding="utf-8")
+        with patch(
+            "agentbox.core._publish_catalog_revision", side_effect=KeyboardInterrupt
+        ), self.assertRaises(KeyboardInterrupt):
+            run_operation(
+                self.config,
+                OperationRequest("backup", tool="opencode", host="test-host"),
+                lambda event: None,
+            )
+
+        replacement = self.root / "replacement-catalog"
+        self.run_cli("storage", "--local", str(replacement))
+
+        saved = json.loads(self.config.read_text(encoding="utf-8"))
+        self.assertEqual({"local": str(replacement)}, saved["storage"])
+        revisions = catalog_history_root(self.catalog_root) / "revisions"
+        self.assertEqual(2, len(list(revisions.glob("*.json"))))
+
+    def test_history_rejects_symlinked_storage_directories(self):
+        self.add_command("opencode_commands")
+        self.run_cli("backup", "opencode")
+        revision = list_catalog_revisions(self.config)[0]
+        history_root = catalog_history_root(self.catalog_root)
+        snapshots = history_root / "snapshots"
+        redirected = self.root / "redirected-snapshots"
+        snapshots.rename(redirected)
+        snapshots.symlink_to(redirected, target_is_directory=True)
+
+        with self.assertRaisesRegex(AgentBoxError, "not a regular directory"):
+            inspect_catalog_revision(self.config, revision.revision_id)
+
+    def test_history_rejects_a_catalog_that_contains_managed_history(self):
+        result = self.run_cli(
+            "storage", "--local", str(self.root / "data/agentbox"), expected=2
+        )
+
+        self.assertIn("must not overlap", result.stderr)
+        saved = json.loads(self.config.read_text(encoding="utf-8"))
+        self.assertEqual({"local": str(self.catalog_root)}, saved["storage"])
+
+    def test_corrupt_local_history_object_stops_restore_before_writing(self):
+        command, first_content = self.add_command("opencode_commands", body="First")
+        self.run_cli("backup", "opencode")
+        revision = list_catalog_revisions(self.config)[0]
+        command.write_text(first_content.replace("First", "Second"), encoding="utf-8")
+        history_root = catalog_history_root(self.catalog_root)
+        snapshot = json.loads(
+            (history_root / "snapshots/{}.json".format(revision.snapshot)).read_text(
+                encoding="utf-8"
+            )
+        )
+        command_entry = next(
+            entry
+            for entry in snapshot["entries"]
+            if entry["path"].endswith("commands/audit.md")
+        )
+        (history_root / "objects" / command_entry["hash"]).write_bytes(b"corrupt")
+
+        result = self.run_cli(
+            "restore",
+            "opencode",
+            "--as-backed-up",
+            "--revision",
+            revision.revision_id,
+            expected=2,
+        )
+
+        self.assertIn("integrity verification", result.stderr)
+        self.assertIn("Second", command.read_text(encoding="utf-8"))
 
     def test_converted_restore_does_not_duplicate_on_next_backup(self):
         self.add_skill("codex_secondary", "jira-ticket")

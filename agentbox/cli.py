@@ -5,7 +5,14 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from .core import AgentBoxError, OperationRequest, managed_provider_ids, run_operation
+from .core import (
+    AgentBoxError,
+    OperationRequest,
+    inspect_catalog_revision,
+    list_catalog_revisions,
+    managed_provider_ids,
+    run_operation,
+)
 from .paths import default_config_path
 from .update import check_for_updates, current_build
 
@@ -83,9 +90,18 @@ def parse_args(
         action="store_true",
         help="restore exact original artifacts to their recorded locations",
     )
+    restore.add_argument(
+        "--revision",
+        dest="catalog_revision",
+        metavar="REVISION",
+        help="restore from an immutable local catalog revision",
+    )
 
     status = subparsers.add_parser("status", help="compare tool artifacts with their exact backups")
     status.add_argument("tool", nargs="?", default="all", choices=tool_choices)
+
+    history = subparsers.add_parser("history", help="list or inspect local catalog revisions")
+    history.add_argument("catalog_revision", nargs="?", metavar="REVISION")
 
     storage = subparsers.add_parser(
         "storage", help="persist local, managed Git, or dual storage"
@@ -149,6 +165,42 @@ def main(
             open_browser=not args.no_open,
         )
 
+    if args.action == "history":
+        if args.catalog_revision:
+            detail = inspect_catalog_revision(
+                config_path, args.catalog_revision, args.host
+            )
+            revision = detail.summary
+            print(
+                "REVISION {} {} host={} artifacts={} changes={}".format(
+                    revision.revision_id,
+                    revision.created_at,
+                    revision.host,
+                    revision.artifact_count,
+                    revision.changes,
+                )
+            )
+            for artifact in detail.artifacts:
+                print(
+                    "CATALOG {host} {tool} {kind} {path}".format(**artifact)
+                )
+        else:
+            revisions = list_catalog_revisions(config_path, args.host)
+            if not revisions:
+                print("No local catalog revisions.")
+            for revision in revisions:
+                print(
+                    "REVISION {} {} host={} artifacts={} changes={}".format(
+                        revision.revision_id,
+                        revision.created_at,
+                        revision.host,
+                        revision.artifact_count,
+                        revision.changes,
+                    )
+                )
+        announce_available_update()
+        return 0
+
     request = OperationRequest(
         action=args.action,
         tool=getattr(args, "tool", "all"),
@@ -163,6 +215,7 @@ def main(
         force=getattr(args, "force", False),
         storage_local=getattr(args, "storage_local", None),
         storage_git=getattr(args, "storage_git", None),
+        catalog_revision=getattr(args, "catalog_revision", None),
     )
     run_operation(config_path, request)
     announce_available_update()

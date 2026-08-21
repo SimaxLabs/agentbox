@@ -9,7 +9,7 @@ import threading
 import time
 import webbrowser
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -24,10 +24,13 @@ from .core import (
     OperationEvent,
     OperationRequest,
     application_operation_guard,
+    catalog_revision_signature,
     catalog_hosts,
     default_local_catalog,
     external_program_environment,
     git_storage_revision,
+    inspect_catalog_revision,
+    list_catalog_revisions,
     load_config,
     load_manifest,
     provider_detection,
@@ -86,7 +89,14 @@ def event_payload(event: OperationEvent) -> dict:
         tone = "change"
     elif event.kind in ("prune", "conflict", "different", "unbacked"):
         tone = "danger"
-    elif event.kind in ("keep", "no-sources", "catalog-only"):
+    elif event.kind in (
+        "keep",
+        "no-sources",
+        "catalog-only",
+        "revision",
+        "history",
+        "history-warning",
+    ):
         tone = "warning"
     elif event.kind == "clean":
         tone = "success"
@@ -156,10 +166,13 @@ def update_path_identity(digest: object, path: Path) -> None:
     digest.update(b"\0")
 
 
-def plan_signature(changes: int, events: list[dict], filesystem: str) -> str:
+def plan_signature(
+    request: OperationRequest, changes: int, events: list[dict], filesystem: str
+) -> str:
     reviewed = {
         "changes": changes,
         "filesystem": filesystem,
+        "request": asdict(replace(request, dry_run=False)),
         "events": [
             {
                 "kind": event["kind"],
@@ -236,6 +249,11 @@ class WebRuntime:
         revision = git_storage_revision(config)
         digest.update((revision or "no-git-revision").encode("ascii"))
         digest.update(b"\0")
+        if request.catalog_revision is not None:
+            digest.update(
+                catalog_revision_signature(config, request.catalog_revision).encode("ascii")
+            )
+            digest.update(b"\0")
         for root in sorted(roots, key=lambda item: str(item)):
             update_tree_fingerprint(digest, root)
         return digest.hexdigest()
@@ -276,7 +294,7 @@ class WebRuntime:
             self.previews[token] = StoredPreview(
                 replace(request, dry_run=False),
                 now,
-                plan_signature(changes, events, filesystem),
+                plan_signature(request, changes, events, filesystem),
             )
         return token, changes, events
 
@@ -330,7 +348,9 @@ class WebRuntime:
                             "The filesystem changed during confirmation; review a new dry run"
                         )
                     if (
-                        plan_signature(current_changes, current_events, filesystem)
+                        plan_signature(
+                            job.request, current_changes, current_events, filesystem
+                        )
                         != job.expected_plan
                     ):
                         raise AgentBoxError(
@@ -340,7 +360,9 @@ class WebRuntime:
                     def verify_reviewed_filesystem() -> None:
                         latest = self.filesystem_signature(job.request)
                         if (
-                            plan_signature(current_changes, current_events, latest)
+                            plan_signature(
+                                job.request, current_changes, current_events, latest
+                            )
                             != job.expected_plan
                         ):
                             raise AgentBoxError(
@@ -442,7 +464,32 @@ class WebRuntime:
                                 or "catalog",
                             }
                         )
-        return {"tools": tools, "inventory": inventory, "config": config}
+                revisions = (
+                    list_catalog_revisions(
+                        self.config_path,
+                        selected_host,
+                        acquire_lock=False,
+                    )
+                    if config.get("_history_enabled")
+                    else []
+                )
+        return {
+            "tools": tools,
+            "inventory": inventory,
+            "config": config,
+            "history_enabled": config.get("_history_enabled", False),
+            "revisions": revisions,
+        }
+
+    def revision_detail(self, selected_host: str, revision_id: str):
+        with self.operation_lock:
+            with self.operation_guard(selected_host):
+                return inspect_catalog_revision(
+                    self.config_path,
+                    revision_id,
+                    selected_host,
+                    acquire_lock=False,
+                )
 
 
 def checked_csrf(runtime: WebRuntime, supplied: object) -> None:
@@ -519,6 +566,7 @@ def operation_from_form(runtime: WebRuntime, form: object) -> OperationRequest:
         all_hosts=form_flag(form, "all_hosts"),
         as_backed_up=as_backed_up,
         force=form_flag(form, "force"),
+        catalog_revision=str(form.get("catalog_revision", "")).strip() or None,
     )
 
 
@@ -531,7 +579,12 @@ def operation_label(request: OperationRequest) -> str:
     if request.action == "backup":
         return "Back up {}".format(target)
     mode = "exact originals" if request.as_backed_up else "portable skills"
-    return "Restore {} to {}".format(mode, target)
+    source = (
+        " from revision {}".format(request.catalog_revision[-16:])
+        if request.catalog_revision
+        else ""
+    )
+    return "Restore {}{} to {}".format(mode, source, target)
 
 
 def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
@@ -660,6 +713,28 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
                 "update_status": status,
             },
         )
+
+    @app.get("/catalog/revisions/{revision_id}", response_class=HTMLResponse)
+    async def catalog_revision(
+        request: Request, revision_id: str, host: str | None = None
+    ):
+        try:
+            selected_host = runtime.validate_host(host or "")
+            detail = await run_in_threadpool(
+                runtime.revision_detail, selected_host, revision_id
+            )
+            return templates.TemplateResponse(
+                request=request,
+                name="partials/catalog_revision.html",
+                context={"request": request, "detail": detail},
+            )
+        except AgentBoxError as exc:
+            return templates.TemplateResponse(
+                request=request,
+                name="partials/catalog_revision.html",
+                context={"request": request, "error": str(exc)},
+                status_code=404,
+            )
 
     @app.post("/operations/preview", response_class=HTMLResponse)
     async def preview_operation(request: Request):

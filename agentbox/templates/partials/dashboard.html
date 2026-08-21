@@ -75,5 +75,29 @@
       <p class="no-results" data-no-results hidden>No artifacts match this filter.</p>
       {% else %}<div class="inventory-empty">No catalog artifacts have been backed up for this host.</div>{% endif %}
     </section>
+
+    {% if history_enabled %}
+    <section class="catalog-history">
+      <div class="inventory-header">
+        <div><p class="kicker">Local catalog</p><h2>Revision history</h2></div>
+        <span>{{ revisions | length }} revision{% if revisions | length != 1 %}s{% endif %}</span>
+      </div>
+      {% if revisions %}
+      <div class="history-list">
+        {% for revision in revisions %}
+        <button type="button" class="history-row" hx-get="/catalog/revisions/{{ revision.revision_id }}?host={{ selected_host }}" hx-target="#revision-detail" hx-swap="innerHTML">
+          <span><strong>{{ revision.created_at }}</strong><small>{{ revision.revision_id }}</small></span>
+          <span>{{ revision.host }}</span>
+          <span>{{ revision.artifact_count }} artifacts</span>
+          <span>{{ revision.changes }} changes</span>
+        </button>
+        {% endfor %}
+      </div>
+      <div id="revision-detail" class="revision-detail"><p>Select a revision to inspect its catalog inventory.</p></div>
+      {% else %}
+      <div class="inventory-empty">The first changed backup will create a local catalog revision.</div>
+      {% endif %}
+    </section>
+    {% endif %}
   </div>
 </div>

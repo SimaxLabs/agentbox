@@ -34,11 +34,14 @@ except ImportError:  # pragma: no cover - POSIX has no msvcrt.
 VERSION = 1
 CONFIG_VERSION = 2
 PROVIDER_DEFINITIONS_VERSION = 1
+HISTORY_VERSION = 1
 GIT_TIMEOUT_SECONDS = 120
 _GENERATED_SKILL_DIRECTORY_MODE = 0o755
 _GENERATED_SKILL_FILE_MODE = 0o644
 SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 CONFIG_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+REVISION_ID = re.compile(r"^[0-9]{8}T[0-9]{12}Z-[0-9a-f]{16}$")
+CONTENT_HASH = re.compile(r"^[0-9a-f]{64}$")
 PLACEHOLDER = re.compile(r"\$(?:ARGUMENTS(?:\[[0-9]+\])?|[A-Z][A-Z0-9_]*|[0-9]+)")
 
 
@@ -63,6 +66,7 @@ class Artifact:
     payload: Path
     sources: list[Source] = field(default_factory=list)
     host: str = ""
+    catalog_revision: str | None = None
 
 
 @dataclass
@@ -111,6 +115,28 @@ class OperationRequest:
     storage_local: str | None = None
     storage_git: str | None = None
     provider_resources: tuple[str, ...] = ()
+    catalog_revision: str | None = None
+
+
+@dataclass(frozen=True)
+class CatalogRevisionSummary:
+    revision_id: str
+    created_at: str
+    host: str
+    tools: tuple[str, ...]
+    artifact_count: int
+    changes: int
+    snapshot: str
+
+    @property
+    def short_id(self) -> str:
+        return self.revision_id[-16:]
+
+
+@dataclass(frozen=True)
+class CatalogRevisionDetail:
+    summary: CatalogRevisionSummary
+    artifacts: tuple[dict[str, str], ...]
 
 
 @dataclass
@@ -167,6 +193,28 @@ def default_local_catalog() -> Path:
     return user_data_root() / "catalog"
 
 
+def catalog_history_root(local_root: Path) -> Path:
+    identity = hashlib.sha256(str(local_root.expanduser().resolve()).encode("utf-8")).hexdigest()
+    return user_data_root() / "history" / identity
+
+
+def _history_storage(local_root: Path | None, git_url: str | None) -> tuple[bool, Path | None]:
+    enabled = local_root is not None and git_url is None
+    root = catalog_history_root(local_root) if local_root is not None else None
+    if enabled and root is not None:
+        resolved_local = local_root.expanduser().resolve()
+        resolved_history = root.expanduser().resolve()
+        if resolved_local.is_relative_to(resolved_history) or resolved_history.is_relative_to(
+            resolved_local
+        ):
+            raise AgentBoxError(
+                "Local catalog and managed history paths must not overlap: {} and {}".format(
+                    local_root, root
+                )
+            )
+    return enabled, root
+
+
 def user_state_root() -> Path:
     if sys.platform == "win32":  # pragma: no cover - exercised on Windows.
         return user_data_root() / "state"
@@ -193,6 +241,8 @@ def storage_lock_identities(config: dict) -> list[Path]:
         identities.append(config["_storage_local"])
     if config["_storage_git_checkout"] is not None:
         identities.append(config["_storage_git_checkout"])
+    if config.get("_history_enabled"):
+        identities.append(config["_history_root"])
     return identities
 
 
@@ -473,6 +523,20 @@ def load_config(path: Path, host_override: str | None = None) -> dict:
     config["_storage_git_url"] = git_url
     config["_storage_git_checkout"] = git_checkout
     config["_storage_git_catalog"] = git_catalog
+    history = config.get("history", {})
+    if not isinstance(history, dict) or set(history) - {"max_revisions"}:
+        raise AgentBoxError("history must contain only max_revisions")
+    max_revisions = history.get("max_revisions")
+    if max_revisions is not None and (
+        not isinstance(max_revisions, int)
+        or isinstance(max_revisions, bool)
+        or max_revisions < 1
+    ):
+        raise AgentBoxError("history.max_revisions must be a positive integer")
+    history_enabled, history_root = _history_storage(local_root, git_url)
+    config["_history_enabled"] = history_enabled
+    config["_history_root"] = history_root
+    config["_history_max_revisions"] = max_revisions
     config["_catalog_root"] = catalog_root
     config["_catalog"] = config["_catalog_root"] / host
     if config["_catalog"].is_symlink():
@@ -1159,18 +1223,30 @@ def receipt_has_current_origin(config: dict, receipt: dict) -> bool:
             continue
         try:
             relative = safe_relative_path(origin.get("path"))
-            host_root = config["_catalog_root"] / host
-            if host_root.is_symlink():
-                continue
-            payload = checked_join(host_root / tool, relative)
-            if not payload.exists():
-                continue
-            name = read_skill_name(payload) if kind == "skill" else command_name(
-                payload.relative_to(host_root / tool / "commands").as_posix()
-            )
-            artifact = Artifact(tool, kind, name, relative.as_posix(), payload, host=host)
-            if artifact_portable_fingerprint(artifact) == expected:
-                return True
+            revision = origin.get("revision")
+
+            def matches_origin(source_config: dict) -> bool:
+                host_root = source_config["_catalog_root"] / host
+                if host_root.is_symlink():
+                    return False
+                payload = checked_join(host_root / tool, relative)
+                if not payload.exists():
+                    return False
+                name = read_skill_name(payload) if kind == "skill" else command_name(
+                    payload.relative_to(host_root / tool / "commands").as_posix()
+                )
+                artifact = Artifact(tool, kind, name, relative.as_posix(), payload, host=host)
+                return artifact_portable_fingerprint(artifact) == expected
+
+            if revision is None:
+                if matches_origin(config):
+                    return True
+            elif isinstance(revision, str) and REVISION_ID.fullmatch(revision):
+                with materialized_catalog_revision(config, revision) as historical_root:
+                    historical = dict(config)
+                    _select_catalog_root(historical, historical_root)
+                    if matches_origin(historical):
+                        return True
         except (AgentBoxError, ValueError):
             continue
     return False
@@ -1356,14 +1432,22 @@ def remove_path(path: Path) -> None:
         shutil.rmtree(str(path))
 
 
-def install_staged(staged: Path, destination: Path, token: str) -> None:
+def catalog_install_paths(destination: Path, token: str) -> tuple[Path, Path]:
     previous = destination.with_name(".{}.agentbox-old-{}".format(destination.name, token))
+    staged = destination.with_name(".{}.agentbox-new-{}".format(destination.name, token))
+    return previous, staged
+
+
+def install_staged(staged: Path, destination: Path, token: str) -> None:
+    previous, expected_staged = catalog_install_paths(destination, token)
+    if staged != expected_staged:
+        raise AgentBoxError("Staged catalog path does not match its installation token")
     had_destination = destination.exists() or destination.is_symlink()
     if had_destination:
         destination.rename(previous)
     try:
         staged.rename(destination)
-    except Exception:
+    except BaseException:
         if had_destination and previous.exists():
             previous.rename(destination)
         raise
@@ -1372,10 +1456,10 @@ def install_staged(staged: Path, destination: Path, token: str) -> None:
 
 
 @contextmanager
-def _staged_destination(destination: Path):
+def _staged_destination(destination: Path, token: str | None = None):
     destination.parent.mkdir(parents=True, exist_ok=True)
-    token = uuid.uuid4().hex
-    staged = destination.with_name(".{}.agentbox-new-{}".format(destination.name, token))
+    token = token or uuid.uuid4().hex
+    _, staged = catalog_install_paths(destination, token)
     try:
         yield staged, token
     finally:
@@ -1383,19 +1467,19 @@ def _staged_destination(destination: Path):
             remove_path(staged)
 
 
-def copy_exact(source: Path, destination: Path) -> None:
+def copy_exact(source: Path, destination: Path, token: str | None = None) -> None:
     validate_regular_payload(source)
-    with _staged_destination(destination) as (staged, token):
+    with _staged_destination(destination, token) as (staged, install_token):
         if source.is_dir():
             shutil.copytree(str(source), str(staged), symlinks=False)
         else:
             shutil.copy2(str(source), str(staged))
-        install_staged(staged, destination, token)
+        install_staged(staged, destination, install_token)
 
 
-def replace_catalog(source: Path, destination: Path) -> None:
+def replace_catalog(source: Path, destination: Path, token: str | None = None) -> None:
     if source.exists():
-        copy_exact(source, destination)
+        copy_exact(source, destination, token)
     elif destination.exists() or destination.is_symlink():
         remove_path(destination)
 
@@ -1417,6 +1501,733 @@ def optional_catalog_snapshot(source: Path | None):
     existed = source.exists()
     with staged_catalog(source) as snapshot:
         yield snapshot, existed
+
+
+def _canonical_json(value: object) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode(
+        "utf-8"
+    )
+
+
+def _regular_history_root(config: dict, *, create: bool) -> Path:
+    if not config.get("_history_enabled") or config.get("_history_root") is None:
+        raise AgentBoxError("Local catalog history is available only with local-only storage")
+    root = config["_history_root"]
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
+    if root.is_symlink() or (root.exists() and not root.is_dir()):
+        raise AgentBoxError("History root is not a regular directory: {}".format(root))
+    return root
+
+
+def _history_directory(root: Path, name: str, *, create: bool) -> Path:
+    directory = root / name
+    if create:
+        directory.mkdir(parents=True, exist_ok=True)
+    if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
+        raise AgentBoxError("History path is not a regular directory: {}".format(directory))
+    return directory
+
+
+def _stream_sha256(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def _catalog_snapshot_document(root: Path) -> tuple[dict, str, dict[str, Path]]:
+    if root.is_symlink():
+        raise AgentBoxError("Symlinked catalog roots are not supported: {}".format(root))
+    if not root.exists():
+        document = {"version": HISTORY_VERSION, "entries": []}
+        return document, hashlib.sha256(_canonical_json(document)).hexdigest(), {}
+    if not root.is_dir():
+        raise AgentBoxError("Catalog root is not a directory: {}".format(root))
+
+    entries = []
+    objects: dict[str, Path] = {}
+
+    def collect(directory: Path) -> None:
+        for child in sorted(directory.iterdir(), key=lambda item: item.name):
+            relative = child.relative_to(root).as_posix()
+            metadata = child.lstat()
+            mode = stat.S_IMODE(metadata.st_mode)
+            if child.is_symlink():
+                raise AgentBoxError("Symlinked catalog paths are not supported: {}".format(child))
+            if child.is_dir():
+                entries.append({"path": relative, "kind": "directory", "mode": mode})
+                collect(child)
+                continue
+            if not child.is_file():
+                raise AgentBoxError("Unsupported catalog path: {}".format(child))
+            digest, size = _stream_sha256(child)
+            entries.append(
+                {
+                    "path": relative,
+                    "kind": "file",
+                    "mode": mode,
+                    "hash": digest,
+                    "size": size,
+                }
+            )
+            objects.setdefault(digest, child)
+
+    collect(root)
+    entries.sort(key=lambda item: item["path"])
+    document = {"version": HISTORY_VERSION, "entries": entries}
+    snapshot = hashlib.sha256(_canonical_json(document)).hexdigest()
+    return document, snapshot, objects
+
+
+def _write_immutable(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise AgentBoxError("History path is not a regular directory: {}".format(path.parent))
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise AgentBoxError("History entry is not a regular file: {}".format(path))
+        if path.read_bytes() != content:
+            raise AgentBoxError("Immutable history entry changed: {}".format(path))
+        return
+    temporary = path.with_name("{}.tmp-{}".format(path.name, uuid.uuid4().hex))
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as destination:
+            destination.write(content)
+            destination.flush()
+            os.fsync(destination.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_history_object(path: Path, source: Path, digest: str, size: int) -> None:
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise AgentBoxError("History object is not a regular file: {}".format(path))
+        actual_digest, actual_size = _stream_sha256(path)
+        if actual_digest != digest or actual_size != size:
+            raise AgentBoxError("History object failed integrity verification: {}".format(path))
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise AgentBoxError("History path is not a regular directory: {}".format(path.parent))
+    temporary = path.with_name("{}.tmp-{}".format(path.name, uuid.uuid4().hex))
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        written = hashlib.sha256()
+        total = 0
+        with source.open("rb") as input_file, os.fdopen(descriptor, "wb") as output_file:
+            while chunk := input_file.read(1024 * 1024):
+                written.update(chunk)
+                total += len(chunk)
+                output_file.write(chunk)
+            output_file.flush()
+            os.fsync(output_file.fileno())
+        if written.hexdigest() != digest or total != size:
+            raise AgentBoxError("Catalog changed while preparing its history revision")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _catalog_artifact_count(root: Path) -> int:
+    total = 0
+    if not root.exists():
+        return 0
+    for manifest in sorted(root.glob("*/*/manifest.json")):
+        value = load_json(manifest, {})
+        artifacts = value.get("artifacts") if isinstance(value, dict) else None
+        if not isinstance(artifacts, list):
+            raise AgentBoxError("Invalid catalog manifest while creating history: {}".format(manifest))
+        total += len(artifacts)
+    return total
+
+
+def _prepare_catalog_revision(
+    config: dict,
+    catalog_root: Path,
+    request: OperationRequest,
+    changes: int,
+) -> tuple[CatalogRevisionSummary, bytes]:
+    root = _regular_history_root(config, create=True)
+    objects_root = _history_directory(root, "objects", create=True)
+    snapshots_root = _history_directory(root, "snapshots", create=True)
+    _history_directory(root, "revisions", create=True)
+    document, snapshot, objects = _catalog_snapshot_document(catalog_root)
+    sizes = {
+        entry["hash"]: entry["size"]
+        for entry in document["entries"]
+        if entry["kind"] == "file"
+    }
+    for digest, source in objects.items():
+        _write_history_object(objects_root / digest, source, digest, sizes[digest])
+    _write_immutable(snapshots_root / "{}.json".format(snapshot), _canonical_json(document))
+
+    created = datetime.now(UTC)
+    created_at = created.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    revision_id = "{}-{}".format(
+        created.strftime("%Y%m%dT%H%M%S%fZ"), snapshot[:16]
+    )
+    tools = tuple(sorted(config["tools"])) if request.tool == "all" else (request.tool,)
+    summary = CatalogRevisionSummary(
+        revision_id,
+        created_at,
+        config["_host"],
+        tools,
+        _catalog_artifact_count(catalog_root),
+        changes,
+        snapshot,
+    )
+    record = {
+        "version": HISTORY_VERSION,
+        "id": summary.revision_id,
+        "created_at": summary.created_at,
+        "host": summary.host,
+        "tools": list(summary.tools),
+        "artifact_count": summary.artifact_count,
+        "changes": summary.changes,
+        "snapshot": summary.snapshot,
+    }
+    return summary, _canonical_json(record)
+
+
+def _publish_catalog_revision(
+    config: dict, summary: CatalogRevisionSummary, content: bytes
+) -> None:
+    root = _regular_history_root(config, create=True)
+    revisions = _history_directory(root, "revisions", create=True)
+    _write_immutable(revisions / "{}.json".format(summary.revision_id), content)
+
+
+def _revision_path(config: dict, revision_id: str) -> Path:
+    if not isinstance(revision_id, str) or REVISION_ID.fullmatch(revision_id) is None:
+        raise AgentBoxError("Invalid catalog revision: {!r}".format(revision_id))
+    root = _regular_history_root(config, create=False)
+    revisions = _history_directory(root, "revisions", create=False)
+    return revisions / "{}.json".format(revision_id)
+
+
+def _catalog_revision_summary(value: object, revision_id: str) -> CatalogRevisionSummary:
+    required = {
+        "version",
+        "id",
+        "created_at",
+        "host",
+        "tools",
+        "artifact_count",
+        "changes",
+        "snapshot",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise AgentBoxError("Catalog revision metadata is invalid: {}".format(revision_id))
+    tools = value.get("tools")
+    artifact_count = value.get("artifact_count")
+    changes = value.get("changes")
+    if (
+        value.get("version") != HISTORY_VERSION
+        or value.get("id") != revision_id
+        or not isinstance(value.get("created_at"), str)
+        or not isinstance(value.get("host"), str)
+        or CONFIG_NAME.fullmatch(value["host"]) is None
+        or not isinstance(tools, list)
+        or not tools
+        or not all(isinstance(tool, str) and CONFIG_NAME.fullmatch(tool) for tool in tools)
+        or not isinstance(artifact_count, int)
+        or isinstance(artifact_count, bool)
+        or artifact_count < 0
+        or not isinstance(changes, int)
+        or isinstance(changes, bool)
+        or changes < 0
+        or not isinstance(value.get("snapshot"), str)
+        or CONTENT_HASH.fullmatch(value["snapshot"]) is None
+        or not revision_id.endswith("-{}".format(value["snapshot"][:16]))
+    ):
+        raise AgentBoxError("Catalog revision metadata is invalid: {}".format(revision_id))
+    try:
+        created = datetime.strptime(value["created_at"], "%Y-%m-%dT%H:%M:%S.%fZ")
+    except ValueError as exc:
+        raise AgentBoxError("Catalog revision timestamp is invalid: {}".format(revision_id)) from exc
+    if not revision_id.startswith(created.strftime("%Y%m%dT%H%M%S%fZ")):
+        raise AgentBoxError("Catalog revision timestamp is invalid: {}".format(revision_id))
+    return CatalogRevisionSummary(
+        revision_id,
+        value["created_at"],
+        value["host"],
+        tuple(tools),
+        artifact_count,
+        changes,
+        value["snapshot"],
+    )
+
+
+def _load_catalog_revision(config: dict, revision_id: str) -> CatalogRevisionSummary:
+    path = _revision_path(config, revision_id)
+    if path.is_symlink() or not path.is_file():
+        raise AgentBoxError("Unknown catalog revision: {}".format(revision_id))
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AgentBoxError("Catalog revision metadata is invalid: {}".format(revision_id)) from exc
+    return _catalog_revision_summary(value, revision_id)
+
+
+def _load_catalog_snapshot(config: dict, snapshot: str) -> dict:
+    if CONTENT_HASH.fullmatch(snapshot) is None:
+        raise AgentBoxError("Catalog snapshot identity is invalid")
+    root = _regular_history_root(config, create=False)
+    snapshots = _history_directory(root, "snapshots", create=False)
+    path = snapshots / "{}.json".format(snapshot)
+    if path.is_symlink() or not path.is_file():
+        raise AgentBoxError("Catalog snapshot is unavailable: {}".format(snapshot))
+    try:
+        content = path.read_bytes()
+        value = json.loads(content.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AgentBoxError("Catalog snapshot is invalid: {}".format(snapshot)) from exc
+    if hashlib.sha256(_canonical_json(value)).hexdigest() != snapshot:
+        raise AgentBoxError("Catalog snapshot failed integrity verification: {}".format(snapshot))
+    if not isinstance(value, dict) or set(value) != {"version", "entries"}:
+        raise AgentBoxError("Catalog snapshot is invalid: {}".format(snapshot))
+    entries = value.get("entries")
+    if value.get("version") != HISTORY_VERSION or not isinstance(entries, list):
+        raise AgentBoxError("Catalog snapshot is invalid: {}".format(snapshot))
+    seen = set()
+    directories = set()
+    previous = None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise AgentBoxError("Catalog snapshot contains an invalid entry")
+        kind = entry.get("kind")
+        expected_keys = {"path", "kind", "mode"} if kind == "directory" else {
+            "path",
+            "kind",
+            "mode",
+            "hash",
+            "size",
+        }
+        relative = safe_relative_path(entry.get("path"))
+        relative_text = relative.as_posix()
+        mode = entry.get("mode")
+        if (
+            set(entry) != expected_keys
+            or kind not in {"directory", "file"}
+            or relative_text in seen
+            or not isinstance(mode, int)
+            or isinstance(mode, bool)
+            or mode < 0
+            or mode > 0o7777
+            or (previous is not None and relative_text <= previous)
+        ):
+            raise AgentBoxError("Catalog snapshot contains an invalid entry")
+        for parent in relative.parents:
+            if parent == Path("."):
+                continue
+            if parent.as_posix() not in directories:
+                raise AgentBoxError("Catalog snapshot has a missing parent directory")
+        if kind == "directory":
+            directories.add(relative_text)
+        else:
+            size = entry.get("size")
+            if (
+                not isinstance(entry.get("hash"), str)
+                or CONTENT_HASH.fullmatch(entry["hash"]) is None
+                or not isinstance(size, int)
+                or isinstance(size, bool)
+                or size < 0
+            ):
+                raise AgentBoxError("Catalog snapshot contains an invalid file")
+        seen.add(relative_text)
+        previous = relative_text
+    return value
+
+
+def _verified_history_object(config: dict, digest: str, size: int) -> Path:
+    root = _regular_history_root(config, create=False)
+    objects = _history_directory(root, "objects", create=False)
+    path = objects / digest
+    if path.is_symlink() or not path.is_file():
+        raise AgentBoxError("Catalog history object is unavailable: {}".format(digest))
+    actual_digest, actual_size = _stream_sha256(path)
+    if actual_digest != digest or actual_size != size:
+        raise AgentBoxError("Catalog history object failed integrity verification: {}".format(digest))
+    return path
+
+
+def _verified_catalog_revision(config: dict, summary: CatalogRevisionSummary) -> dict:
+    snapshot = _load_catalog_snapshot(config, summary.snapshot)
+    for entry in snapshot["entries"]:
+        if entry["kind"] == "file":
+            _verified_history_object(config, entry["hash"], entry["size"])
+    return snapshot
+
+
+def _history_state_record(snapshot: tuple[bool, bytes, int]) -> dict:
+    existed, content, mode = snapshot
+    return {"existed": existed, "content": content.hex(), "mode": mode}
+
+
+def _history_state_snapshot(value: object, revision_id: str) -> tuple[bool, bytes, int]:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"existed", "content", "mode"}
+        or not isinstance(value.get("existed"), bool)
+        or not isinstance(value.get("content"), str)
+        or not isinstance(value.get("mode"), int)
+        or isinstance(value.get("mode"), bool)
+        or value["mode"] < 0
+        or value["mode"] > 0o7777
+        or (not value["existed"] and (value["content"] or value["mode"] != 0))
+    ):
+        raise AgentBoxError(
+            "Catalog history transaction state is invalid: {}".format(revision_id)
+        )
+    try:
+        return value["existed"], bytes.fromhex(value["content"]), value["mode"]
+    except ValueError as exc:
+        raise AgentBoxError(
+            "Catalog history transaction state is invalid: {}".format(revision_id)
+        ) from exc
+
+
+def _begin_history_transaction(
+    config: dict,
+    summary: CatalogRevisionSummary,
+    revision_content: bytes,
+    before_snapshot: str,
+    before_state: tuple[bool, bytes, int],
+    updated_state: tuple[bool, bytes, int],
+) -> Path:
+    if CONTENT_HASH.fullmatch(before_snapshot) is None:
+        raise AgentBoxError("Catalog transaction has an invalid starting snapshot")
+    try:
+        revision = json.loads(revision_content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AgentBoxError("Catalog transaction has invalid revision metadata") from exc
+    _catalog_revision_summary(revision, summary.revision_id)
+    root = _regular_history_root(config, create=True)
+    transactions = _history_directory(root, "transactions", create=True)
+    path = transactions / "{}.json".format(summary.revision_id)
+    _write_immutable(
+        path,
+        _canonical_json(
+            {
+                "version": HISTORY_VERSION,
+                "before_snapshot": before_snapshot,
+                "revision": revision,
+                "state_path": str(config["_state_file"].expanduser().resolve()),
+                "state_before": _history_state_record(before_state),
+                "state_after": _history_state_record(updated_state),
+            }
+        ),
+    )
+    return path
+
+
+def _recover_catalog_installation(
+    destination: Path,
+    revision_id: str,
+    before_snapshot: str,
+    after_snapshot: str,
+) -> str:
+    previous, staged = catalog_install_paths(destination, revision_id)
+    _, current_snapshot, _ = _catalog_snapshot_document(destination)
+
+    def remove_copy(path: Path, expected: str) -> None:
+        if not path.exists() and not path.is_symlink():
+            return
+        _, snapshot, _ = _catalog_snapshot_document(path)
+        if snapshot != expected:
+            raise AgentBoxError(
+                "Interrupted catalog installation path changed; refusing to remove {}".format(
+                    path
+                )
+            )
+        remove_path(path)
+
+    if current_snapshot == before_snapshot:
+        if staged.exists() or staged.is_symlink():
+            remove_path(staged)
+        remove_copy(previous, before_snapshot)
+        return current_snapshot
+    if current_snapshot == after_snapshot:
+        remove_copy(staged, after_snapshot)
+        remove_copy(previous, before_snapshot)
+        return current_snapshot
+    if not destination.exists() and not destination.is_symlink() and previous.exists():
+        _, previous_snapshot, _ = _catalog_snapshot_document(previous)
+        if previous_snapshot != before_snapshot:
+            raise AgentBoxError("Interrupted catalog installation backup changed")
+        if staged.exists():
+            _, staged_snapshot, _ = _catalog_snapshot_document(staged)
+            if staged_snapshot != after_snapshot:
+                raise AgentBoxError("Interrupted staged catalog changed")
+            staged.rename(destination)
+            remove_path(previous)
+            return after_snapshot
+        previous.rename(destination)
+        return before_snapshot
+    raise AgentBoxError(
+        "Catalog changed while recovering interrupted history revision {}; refusing to guess".format(
+            revision_id
+        )
+    )
+
+
+def _recover_history_transactions(config: dict) -> None:
+    root = _regular_history_root(config, create=False)
+    transactions = _history_directory(root, "transactions", create=False)
+    if not transactions.exists():
+        return
+    local_root = config.get("_storage_local")
+    if local_root is None:
+        raise AgentBoxError("Local history recovery requires a local catalog")
+    for path in sorted(transactions.glob("*.json")):
+        revision_id = path.stem
+        if (
+            REVISION_ID.fullmatch(revision_id) is None
+            or path.is_symlink()
+            or not path.is_file()
+        ):
+            raise AgentBoxError("Catalog history transaction is invalid: {}".format(path))
+        try:
+            transaction = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise AgentBoxError(
+                "Catalog history transaction is invalid: {}".format(revision_id)
+            ) from exc
+        if (
+            not isinstance(transaction, dict)
+            or set(transaction)
+            != {
+                "version",
+                "before_snapshot",
+                "revision",
+                "state_path",
+                "state_before",
+                "state_after",
+            }
+            or transaction.get("version") != HISTORY_VERSION
+            or not isinstance(transaction.get("before_snapshot"), str)
+            or CONTENT_HASH.fullmatch(transaction["before_snapshot"]) is None
+            or transaction.get("state_path")
+            != str(config["_state_file"].expanduser().resolve())
+        ):
+            raise AgentBoxError(
+                "Catalog history transaction is invalid: {}".format(revision_id)
+            )
+        state_before = _history_state_snapshot(transaction["state_before"], revision_id)
+        state_after = _history_state_snapshot(transaction["state_after"], revision_id)
+        revision = transaction["revision"]
+        summary = _catalog_revision_summary(revision, revision_id)
+        revision_content = _canonical_json(revision)
+        published = _revision_path(config, revision_id)
+        if published.exists() or published.is_symlink():
+            _write_immutable(published, revision_content)
+            path.unlink()
+            try:
+                _apply_history_retention(config, revision_id)
+            except (AgentBoxError, OSError):
+                pass
+            continue
+        current_state = _file_snapshot(config["_state_file"])
+        if (
+            state_before != state_after
+            and current_state != state_before
+            and current_state != state_after
+        ):
+            raise AgentBoxError(
+                "State changed while recovering interrupted history revision {}; "
+                "refusing to overwrite it".format(revision_id)
+            )
+        current_snapshot = _recover_catalog_installation(
+            local_root,
+            revision_id,
+            transaction["before_snapshot"],
+            summary.snapshot,
+        )
+        if current_snapshot == summary.snapshot:
+            _verified_catalog_revision(config, summary)
+            if state_before != state_after and current_state == state_before:
+                _restore_file_snapshot(config["_state_file"], state_after)
+            _publish_catalog_revision(config, summary, revision_content)
+            path.unlink()
+            try:
+                _apply_history_retention(config, revision_id)
+            except (AgentBoxError, OSError):
+                pass
+            continue
+        elif state_before != state_after and current_state == state_after:
+            _restore_file_snapshot(config["_state_file"], state_before)
+        path.unlink()
+
+
+def catalog_revision_signature(config: dict, revision_id: str) -> str:
+    summary = _load_catalog_revision(config, revision_id)
+    snapshot = _verified_catalog_revision(config, summary)
+    digest = hashlib.sha256()
+    digest.update(_revision_path(config, revision_id).read_bytes())
+    digest.update(_canonical_json(snapshot))
+    for entry in snapshot["entries"]:
+        if entry["kind"] == "file":
+            digest.update(entry["hash"].encode("ascii"))
+            digest.update(str(entry["size"]).encode("ascii"))
+    return digest.hexdigest()
+
+
+@contextmanager
+def materialized_catalog_revision(config: dict, revision_id: str):
+    summary = _load_catalog_revision(config, revision_id)
+    snapshot = _load_catalog_snapshot(config, summary.snapshot)
+    with tempfile.TemporaryDirectory(prefix="agentbox-history-") as temporary:
+        root = Path(temporary) / "catalog"
+        root.mkdir()
+        directory_modes = []
+        for entry in snapshot["entries"]:
+            destination = checked_join(root, safe_relative_path(entry["path"]))
+            if entry["kind"] == "directory":
+                destination.mkdir(parents=True, exist_ok=False)
+                directory_modes.append((destination, entry["mode"]))
+                continue
+            source = _verified_history_object(config, entry["hash"], entry["size"])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+            destination.chmod(entry["mode"])
+        for directory, mode in reversed(directory_modes):
+            directory.chmod(mode)
+        yield root
+
+
+def _revision_artifacts(config: dict, revision_id: str) -> tuple[dict[str, str], ...]:
+    artifacts = []
+    with materialized_catalog_revision(config, revision_id) as root:
+        for manifest in sorted(root.glob("*/*/manifest.json")):
+            relative = manifest.relative_to(root)
+            host, tool = relative.parts[:2]
+            value = load_json(manifest, {})
+            entries = value.get("artifacts") if isinstance(value, dict) else None
+            if not isinstance(entries, list):
+                raise AgentBoxError("Historical catalog manifest is invalid: {}".format(relative))
+            for entry in entries:
+                if not isinstance(entry, dict) or entry.get("kind") not in {"skill", "command"}:
+                    raise AgentBoxError("Historical catalog manifest is invalid: {}".format(relative))
+                name = entry.get("name")
+                path = entry.get("path")
+                if (
+                    not isinstance(name, str)
+                    or SKILL_NAME.fullmatch(name) is None
+                    or safe_relative_path(path).as_posix() != path
+                ):
+                    raise AgentBoxError("Historical catalog manifest is invalid: {}".format(relative))
+                artifacts.append(
+                    {"host": host, "tool": tool, "kind": entry["kind"], "name": name, "path": path}
+                )
+    return tuple(
+        sorted(
+            artifacts,
+            key=lambda item: (item["host"], item["tool"], item["kind"], item["path"]),
+        )
+    )
+
+
+def _list_catalog_revisions(config: dict) -> list[CatalogRevisionSummary]:
+    root = _regular_history_root(config, create=False)
+    revisions = root / "revisions"
+    if not revisions.exists():
+        return []
+    if revisions.is_symlink() or not revisions.is_dir():
+        raise AgentBoxError("History revisions path is not a regular directory")
+    result = []
+    for path in sorted(revisions.glob("*.json"), reverse=True):
+        result.append(_load_catalog_revision(config, path.stem))
+    return result
+
+
+def list_catalog_revisions(
+    config_path: Path,
+    host_override: str | None = None,
+    *,
+    acquire_lock: bool = True,
+) -> list[CatalogRevisionSummary]:
+    config_path = config_path.expanduser().resolve()
+    config = load_config(config_path, host_override)
+    if acquire_lock:
+        identities = storage_lock_identities(config)
+        with application_operation_guard(config_path, *identities):
+            return list_catalog_revisions(
+                config_path, host_override, acquire_lock=False
+            )
+    _recover_history_transactions(config)
+    return _list_catalog_revisions(config)
+
+
+def inspect_catalog_revision(
+    config_path: Path,
+    revision_id: str,
+    host_override: str | None = None,
+    *,
+    acquire_lock: bool = True,
+) -> CatalogRevisionDetail:
+    config_path = config_path.expanduser().resolve()
+    config = load_config(config_path, host_override)
+    if acquire_lock:
+        identities = storage_lock_identities(config)
+        with application_operation_guard(config_path, *identities):
+            return inspect_catalog_revision(
+                config_path,
+                revision_id,
+                host_override,
+                acquire_lock=False,
+            )
+    _recover_history_transactions(config)
+    summary = _load_catalog_revision(config, revision_id)
+    catalog_revision_signature(config, revision_id)
+    return CatalogRevisionDetail(summary, _revision_artifacts(config, revision_id))
+
+
+def _apply_history_retention(config: dict, keep_revision: str) -> None:
+    maximum = config.get("_history_max_revisions")
+    if maximum is None:
+        return
+    revisions = _list_catalog_revisions(config)
+    if len(revisions) <= maximum:
+        return
+    root = _regular_history_root(config, create=False)
+    retained = [revision for revision in revisions if revision.revision_id == keep_revision]
+    retained.extend(
+        revision
+        for revision in revisions
+        if revision.revision_id != keep_revision
+    )
+    retained = retained[:maximum]
+    snapshots = {revision.snapshot for revision in retained}
+    objects = set()
+    for snapshot in snapshots:
+        document = _load_catalog_snapshot(config, snapshot)
+        for entry in document["entries"]:
+            if entry["kind"] == "file":
+                _verified_history_object(config, entry["hash"], entry["size"])
+                objects.add(entry["hash"])
+
+    snapshot_root = _history_directory(root, "snapshots", create=False)
+    object_root = _history_directory(root, "objects", create=False)
+    retained_ids = {revision.revision_id for revision in retained}
+    for revision in revisions:
+        if revision.revision_id in retained_ids:
+            continue
+        (root / "revisions/{}.json".format(revision.revision_id)).unlink(missing_ok=True)
+    if snapshot_root.exists():
+        for path in snapshot_root.glob("*.json"):
+            if path.stem not in snapshots:
+                path.unlink(missing_ok=True)
+    if object_root.exists():
+        for path in object_root.iterdir():
+            if path.is_file() and not path.is_symlink() and path.name not in objects:
+                path.unlink(missing_ok=True)
 
 
 def restore_catalog_snapshot(snapshot: Path, existed: bool, destination: Path) -> None:
@@ -1759,6 +2570,7 @@ def scan_catalog(config: dict, source_tools: Sequence[str]) -> list[Artifact]:
                         skill_dir.relative_to(root).as_posix(),
                         skill_dir,
                         host=config["_host"],
+                        catalog_revision=config.get("_catalog_revision"),
                     )
                 )
         commands = root / "commands"
@@ -1774,6 +2586,7 @@ def scan_catalog(config: dict, source_tools: Sequence[str]) -> list[Artifact]:
                         command.relative_to(root).as_posix(),
                         command,
                         host=config["_host"],
+                        catalog_revision=config.get("_catalog_revision"),
                     )
                 )
     return artifacts
@@ -1828,6 +2641,8 @@ def build_candidates(artifacts: Sequence[Artifact]) -> tuple[list[Candidate], li
             "kind": artifact.kind,
             "path": artifact.catalog_path,
         }
+        if artifact.catalog_revision is not None:
+            origin["revision"] = artifact.catalog_revision
         if artifact.kind == "skill":
             candidate = Candidate(artifact.name, artifact.payload, None, [origin])
         else:
@@ -2460,7 +3275,8 @@ def _requested_storage(request: OperationRequest) -> dict[str, str]:
 def _configured_storage_update(config_path: Path, request: OperationRequest) -> dict:
     candidate = load_json(config_path, {})
     candidate["storage"] = _requested_storage(request)
-    _parse_storage(candidate, config_path.parent)
+    local_root, git_url, _ = _parse_storage(candidate, config_path.parent)
+    _history_storage(local_root, git_url)
     return candidate
 
 
@@ -2508,7 +3324,8 @@ def _configured_provider_update(config_path: Path, request: OperationRequest) ->
         for provider_id in definitions
     }
     candidate["storage"] = _requested_storage(request)
-    _parse_storage(candidate, config_path.parent)
+    local_root, git_url, _ = _parse_storage(candidate, config_path.parent)
+    _history_storage(local_root, git_url)
     return candidate
 
 
@@ -2608,7 +3425,22 @@ def run_operation(
     config_path = config_path.expanduser().resolve()
     if request.action == "providers":
         if acquire_lock:
-            with application_operation_guard(config_path):
+            preliminary = load_config(config_path, request.host) if config_path.exists() else None
+            locked_identities = (
+                storage_lock_identities(preliminary) if preliminary is not None else []
+            )
+            with application_operation_guard(config_path, *locked_identities):
+                if preliminary is not None:
+                    current = load_config(config_path, request.host)
+                    if {
+                        item.expanduser().resolve()
+                        for item in storage_lock_identities(current)
+                    } != {
+                        item.expanduser().resolve() for item in locked_identities
+                    }:
+                        raise AgentBoxError(
+                            "Storage configuration changed while waiting; retry the operation"
+                        )
                 return run_operation(
                     config_path,
                     request,
@@ -2617,6 +3449,10 @@ def run_operation(
                     pre_plan=pre_plan,
                     pre_apply=pre_apply,
                 )
+        if config_path.exists():
+            current = load_config(config_path, request.host)
+            if current.get("_history_enabled"):
+                _recover_history_transactions(current)
         return configure_providers(config_path, request, report, pre_plan, pre_apply)
     if acquire_lock:
         preliminary = load_config(config_path, request.host)
@@ -2636,11 +3472,15 @@ def run_operation(
                 pre_apply=pre_apply,
             )
 
+    config = load_config(config_path, request.host)
+    if config.get("_history_enabled"):
+        _recover_history_transactions(config)
     if request.action == "storage":
         return configure_storage(config_path, request, report, pre_plan, pre_apply)
-    config = load_config(config_path, request.host)
     if request.action not in ("backup", "restore", "status"):
         raise AgentBoxError("Unknown action: {}".format(request.action))
+    if request.catalog_revision is not None and request.action != "restore":
+        raise AgentBoxError("A catalog revision can be selected only for restore")
     session = prepare_storage(config, report)
     if pre_plan is not None:
         pre_plan()
@@ -2650,6 +3490,133 @@ def run_operation(
             pre_apply()
         if request.action == "restore" and session.uses_git:
             initialize_storage_for_restore(session, report)
+
+    if request.catalog_revision is not None:
+        if session.uses_git or not config.get("_history_enabled"):
+            raise AgentBoxError(
+                "Native catalog revisions are available only with local-only storage"
+            )
+        report(
+            OperationEvent(
+                "revision",
+                "USING CATALOG REVISION {}".format(request.catalog_revision),
+                artifact=request.catalog_revision,
+            )
+        )
+        with materialized_catalog_revision(config, request.catalog_revision) as historical_root:
+            historical = dict(config)
+            historical["_catalog_revision"] = request.catalog_revision
+            _select_catalog_root(historical, historical_root)
+            return _run_catalog_operation(
+                historical, request, report, apply_with_storage
+            )
+
+    if request.action == "backup" and config.get("_history_enabled"):
+        report(
+            OperationEvent(
+                "history",
+                "LOCAL HISTORY ACTIVE FOR CHANGED BACKUPS",
+            )
+        )
+        if request.dry_run:
+            return _run_catalog_operation(config, request, report, apply_with_storage)
+        if session.local_root is None:
+            raise AgentBoxError("Local history requires a local catalog")
+        state_snapshot = _file_snapshot(config["_state_file"])
+        _, before_snapshot, _ = _catalog_snapshot_document(session.local_root)
+        with staged_catalog(session.local_root) as staged, optional_catalog_snapshot(
+            session.local_root
+        ) as (local_snapshot, local_existed):
+            working_config = dict(config)
+            _select_catalog_root(working_config, staged)
+            staged_state = staged.parent / "state.json"
+            _restore_file_snapshot(staged_state, state_snapshot)
+            working_config["_state_file"] = staged_state
+            local_updated = False
+            revision_published = False
+            transaction_path = None
+            try:
+                total = _run_catalog_operation(
+                    working_config, request, report, apply_with_storage
+                )
+                updated_state = _file_snapshot(staged_state)
+                _, after_snapshot, _ = _catalog_snapshot_document(staged)
+                if after_snapshot == before_snapshot:
+                    if updated_state != state_snapshot:
+                        _restore_file_snapshot(config["_state_file"], updated_state)
+                    return total
+                summary, revision_content = _prepare_catalog_revision(
+                    config, staged, request, total
+                )
+                transaction_path = _begin_history_transaction(
+                    config,
+                    summary,
+                    revision_content,
+                    before_snapshot,
+                    state_snapshot,
+                    updated_state,
+                )
+                local_updated = True
+                replace_catalog(staged, session.local_root, summary.revision_id)
+                _, installed_snapshot, _ = _catalog_snapshot_document(session.local_root)
+                if installed_snapshot != summary.snapshot:
+                    raise AgentBoxError("Installed catalog failed history verification")
+                _restore_file_snapshot(config["_state_file"], updated_state)
+                _publish_catalog_revision(config, summary, revision_content)
+                revision_published = True
+                try:
+                    transaction_path.unlink()
+                except OSError:
+                    report(
+                        OperationEvent(
+                            "history-warning",
+                            "CATALOG REVISION RECOVERY MARKER WILL BE CLEANED LATER",
+                        )
+                    )
+                report(
+                    OperationEvent(
+                        "revision",
+                        "CREATED CATALOG REVISION {}".format(summary.revision_id),
+                        artifact=summary.revision_id,
+                    )
+                )
+                try:
+                    _apply_history_retention(config, summary.revision_id)
+                except (AgentBoxError, OSError):
+                    report(
+                        OperationEvent(
+                            "history-warning",
+                            "CATALOG REVISION RETENTION WILL RETRY LATER",
+                        )
+                    )
+                return total
+            except Exception as operation_error:
+                if revision_published:
+                    raise
+                rollback_errors = []
+                if local_updated and local_snapshot is not None:
+                    try:
+                        restore_catalog_snapshot(
+                            local_snapshot, local_existed, session.local_root
+                        )
+                    except Exception as exc:
+                        rollback_errors.append(exc)
+                try:
+                    _restore_file_snapshot(config["_state_file"], state_snapshot)
+                except Exception as exc:
+                    rollback_errors.append(exc)
+                if not rollback_errors and transaction_path is not None:
+                    try:
+                        transaction_path.unlink(missing_ok=True)
+                    except Exception as exc:
+                        rollback_errors.append(exc)
+                if rollback_errors:
+                    raise AgentBoxError(
+                        "Local history operation failed and rollback was incomplete: {}".format(
+                            "; ".join(str(error) for error in rollback_errors)
+                        )
+                    ) from operation_error
+                raise
 
     if request.action == "backup" and session.uses_git:
         report(OperationEvent("storage", "GIT BACKUP WILL COMMIT AND PUSH CATALOG CHANGES"))

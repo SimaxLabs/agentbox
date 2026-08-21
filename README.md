@@ -38,6 +38,7 @@ Configuration is treated as valuable data, so uncertainty blocks the operation i
 
 - **Preflight the whole operation.** Multi-provider changes pass every check before the first write. Browser changes also require a reviewed dry run.
 - **Keep a way back.** Existing restore targets receive timestamped safety copies before replacement.
+- **Retain local revisions.** Changed backups in local-only storage create immutable, content-addressed catalog revisions that can be reviewed before restore.
 - **Reject unsafe paths.** Symlinked sources, catalogs, traversal, and overlapping destinations are blocked. Replacing a symlinked restore target requires an explicit `--force`.
 - **Never prune blindly.** An unavailable source cannot silently remove its only known backup.
 - **Keep Git recoverable.** Pushes are never forced. Rejected pushes roll back managed changes, while ambiguous outcomes preserve recoverable state for the next run.
@@ -175,6 +176,40 @@ Restore across all catalog hosts:
 ```bash
 agentbox restore opencode --all-hosts
 ```
+
+## Catalog History
+
+Local-only storage keeps a revision after every successful backup that changes the catalog. Dry runs, failed backups, and unchanged backups do not create revisions. Repeated file content is stored once.
+
+List revisions or inspect one:
+
+```bash
+agentbox history
+agentbox history 20260821T102909799895Z-5f8a026d4a10051c
+```
+
+Preview and restore from an older revision:
+
+```bash
+agentbox restore opencode --revision REVISION_ID --dry-run
+agentbox restore opencode --revision REVISION_ID
+```
+
+Add `--as-backed-up`, `--from`, `--all-tools`, or `--all-hosts` as with a current-catalog restore. The older revision is a read-only source: restoring it changes provider files but does not rewind the current catalog. The browser UI exposes the same revision list, inspection, preview, and confirmation flow.
+
+Native history is intentionally limited to local-only storage. Git and dual storage use Git commits for version history. Local revision data is kept separately under the platform AgentBox data directory in `history/<catalog-path-hash>`.
+
+Retention is unlimited unless `history.max_revisions` is set in the configuration:
+
+```json
+{
+  "history": {
+    "max_revisions": 20
+  }
+}
+```
+
+After a new revision is safely published, older revisions beyond the limit and any now-unreferenced content are removed.
 
 ## Storage
 

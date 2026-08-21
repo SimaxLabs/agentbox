@@ -131,6 +131,15 @@
               {% for tool in tools %}<option value="tool:{{ tool.id }}">Only {{ tool.name }}</option>{% endfor %}
             </select>
           </label>
+          {% if history_enabled %}
+          <label>
+            Catalog revision
+            <select name="catalog_revision">
+              <option value="">Current catalog</option>
+              {% for revision in revisions %}<option value="{{ revision.revision_id }}">{{ revision.created_at }} / {{ revision.host }} / {{ revision.artifact_count }} artifacts</option>{% endfor %}
+            </select>
+          </label>
+          {% endif %}
           <div class="check-grid">
             <label class="check-row compact">
               <input type="checkbox" name="all_hosts">

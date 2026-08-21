@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from agentbox.core import OperationRequest, list_catalog_revisions, run_operation
+
 try:
     import httpx
 
@@ -152,6 +154,62 @@ class AgentBoxWebTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(403, response.status_code)
         self.assertFalse(self.catalog.exists())
+
+    async def test_catalog_history_is_visible_and_uses_reviewed_restore(self):
+        command = self.add_command()
+        first_content = command.read_text(encoding="utf-8")
+        run_operation(
+            self.config,
+            OperationRequest("backup", tool="opencode", host="test-host"),
+        )
+        first_revision = list_catalog_revisions(self.config)[0]
+        command.write_text(first_content + "Second version\n", encoding="utf-8")
+        run_operation(
+            self.config,
+            OperationRequest("backup", tool="opencode", host="test-host"),
+        )
+
+        page = await self.client.get("/")
+        detail = await self.client.get(
+            "/catalog/revisions/{}".format(first_revision.revision_id),
+            params={"host": "test-host"},
+        )
+
+        self.assertIn("Revision history", page.text)
+        self.assertIn(first_revision.revision_id, page.text)
+        self.assertIn("audit", detail.text)
+
+        preview = await self.client.post(
+            "/operations/preview",
+            data={
+                "csrf_token": self.csrf,
+                "action": "restore",
+                "host": "test-host",
+                "tool": "opencode",
+                "restore_mode": "exact",
+                "source_mode": "matching",
+                "catalog_revision": first_revision.revision_id,
+            },
+        )
+        self.assertEqual(200, preview.status_code)
+        self.assertIn("USING CATALOG REVISION", preview.text)
+        self.assertIn("current catalog will not be rewound", preview.text)
+        self.assertIn("Second version", command.read_text(encoding="utf-8"))
+
+        token = re.search(r'name="preview_token" value="([^"]+)"', preview.text).group(1)
+        execute = await self.client.post(
+            "/operations/execute",
+            data={"csrf_token": self.csrf, "preview_token": token},
+        )
+        job_id = re.search(r'data-job-id="([^"]+)"', execute.text).group(1)
+        events = await self.client.get(
+            "/operations/{}/events".format(job_id), params={"token": self.csrf}
+        )
+
+        self.assertIn('"kind": "complete"', events.text)
+        self.assertEqual(first_content, command.read_text(encoding="utf-8"))
+        current_catalog = self.catalog / "test-host/opencode/commands/audit.md"
+        self.assertIn("Second version", current_catalog.read_text(encoding="utf-8"))
 
     async def test_update_status_links_standalone_builds_to_github_release(self):
         release_url = "https://github.com/SimaxLabs/AgentBox/releases/tag/v1.2.0"

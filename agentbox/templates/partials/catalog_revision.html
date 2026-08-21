@@ -1,0 +1,16 @@
+{% if error %}
+<div class="revision-error"><strong>Revision unavailable</strong><p>{{ error }}</p></div>
+{% else %}
+<div class="revision-heading">
+  <div><p class="kicker">Immutable snapshot</p><h3>{{ detail.summary.created_at }}</h3></div>
+  <code>{{ detail.summary.revision_id }}</code>
+</div>
+<p>{{ detail.summary.artifact_count }} catalog artifacts from {{ detail.summary.host }}. Select this timestamp in the Restore card to use it without changing the current catalog.</p>
+{% if detail.artifacts %}
+<div class="revision-artifacts">
+  {% for artifact in detail.artifacts %}
+  <div><strong>{{ artifact.name }}</strong><span>{{ artifact.host }} / {{ artifact.tool }} / {{ artifact.kind }}</span><code>{{ artifact.path }}</code></div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endif %}

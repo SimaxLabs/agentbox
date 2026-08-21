@@ -13,6 +13,7 @@
     {% if operation.prune %}Pruning can remove catalog entries. {% endif %}
     {% if operation.force %}Symlink replacement is enabled. {% endif %}
     {% if operation.action == "restore" %}Existing targets will receive timestamped safety copies before replacement.{% endif %}
+    {% if operation.catalog_revision %} The selected revision is a read-only source; the current catalog will not be rewound.{% endif %}
     {% if operation.action == "providers" %}This saves provider, resource, and storage choices only. Your first backup remains a separate reviewed operation.{% endif %}
   </div>
   {% endif %}
