@@ -573,10 +573,11 @@ def _cached_failure(
 ) -> str | None:
     try:
         value = json.loads(_failure_cache_path().read_text(encoding="utf-8"))
-        error = value.get("error") if isinstance(value, dict) else None
+        if not isinstance(value, dict):
+            return None
+        error = value.get("error")
         if (
-            not isinstance(value, dict)
-            or GITHUB_REPOSITORY.fullmatch(repository) is None
+            GITHUB_REPOSITORY.fullmatch(repository) is None
             or value.get("version") != UPDATE_CACHE_VERSION
             or value.get("repository") != repository
             or value.get("current_version") != current_version
@@ -718,6 +719,23 @@ def check_for_updates(force: bool = False) -> UpdateStatus:
         )
     repository, current_version, current_commit = current_build()
     target = release_target()
+
+    def unavailable_status(error: str) -> UpdateStatus:
+        return UpdateStatus(
+            repository,
+            current_commit,
+            None,
+            None,
+            None,
+            False,
+            target,
+            error=error,
+            warning=warning,
+            current_version=current_version,
+            install_channel=channel,
+            install_command=command,
+        )
+
     cached = (
         None
         if force
@@ -741,20 +759,7 @@ def check_for_updates(force: bool = False) -> UpdateStatus:
                     warning,
                     stale=True,
                 )
-            return UpdateStatus(
-                repository,
-                current_commit,
-                None,
-                None,
-                None,
-                False,
-                target,
-                error=failure,
-                warning=warning,
-                current_version=current_version,
-                install_channel=channel,
-                install_command=command,
-            )
+            return unavailable_status(failure)
     try:
         if cached is None:
             release = fetch_latest_release(repository)
@@ -793,20 +798,7 @@ def check_for_updates(force: bool = False) -> UpdateStatus:
             )
         if not force:
             _store_failure(repository, current_version, current_commit, str(exc))
-        return UpdateStatus(
-            repository,
-            current_commit,
-            None,
-            None,
-            None,
-            False,
-            target,
-            error=str(exc),
-            warning=warning,
-            current_version=current_version,
-            install_channel=channel,
-            install_command=command,
-        )
+        return unavailable_status(str(exc))
     return _release_status(
         repository,
         current_version,

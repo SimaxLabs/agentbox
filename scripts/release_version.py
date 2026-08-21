@@ -10,6 +10,8 @@ from pathlib import Path
 
 
 VERSION = r"(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})"
+SEMANTIC_VERSION = re.compile(VERSION)
+RELEASE_TAG = re.compile(r"^v({})$".format(VERSION))
 RELEASE_LINE = re.compile(r"^Release: v({})$".format(VERSION))
 
 
@@ -28,13 +30,13 @@ def project_version(path: Path) -> str:
         version = value["project"]["version"]
     except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as exc:
         raise ValueError("Cannot read the project version from {}".format(path)) from exc
-    if not isinstance(version, str) or re.fullmatch(VERSION, version) is None:
+    if not isinstance(version, str) or SEMANTIC_VERSION.fullmatch(version) is None:
         raise ValueError("The project version must use canonical X.Y.Z syntax")
     return version
 
 
 def version_key(version: str) -> tuple[int, int, int]:
-    if re.fullmatch(VERSION, version) is None:
+    if SEMANTIC_VERSION.fullmatch(version) is None:
         raise ValueError("Version must use canonical X.Y.Z syntax")
     return tuple(int(part) for part in version.split("."))
 
@@ -43,13 +45,13 @@ def require_newest(version: str, tags: list[str]) -> None:
     requested = version_key(version)
     newer = []
     for tag in tags:
-        match = re.fullmatch(r"v({})".format(VERSION), tag.strip())
+        match = RELEASE_TAG.fullmatch(tag.strip())
         if match and version_key(match.group(1)) > requested:
             newer.append(tag.strip())
     if newer:
         raise ValueError(
             "Release v{} is older than existing release {}".format(
-                version, sorted(newer, key=lambda item: version_key(item[1:]))[-1]
+                version, max(newer, key=lambda item: version_key(item[1:]))
             )
         )
 

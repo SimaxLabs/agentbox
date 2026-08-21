@@ -502,6 +502,10 @@ def form_flag(form: object, name: str) -> bool:
     return str(form.get(name, "")).lower() in ("1", "true", "yes", "on")
 
 
+def _enabled_form_value(form: object, enabled: str, value: str) -> str | None:
+    return str(form.get(value, "")).strip() if form_flag(form, enabled) else None
+
+
 def operation_from_form(runtime: WebRuntime, form: object) -> OperationRequest:
     action = str(form.get("action", ""))
     if action == "providers":
@@ -513,32 +517,16 @@ def operation_from_form(runtime: WebRuntime, form: object) -> OperationRequest:
         return OperationRequest(
             "providers",
             provider_resources=resources,
-            storage_local=(
-                str(form.get("storage_local", "")).strip()
-                if form_flag(form, "local_enabled")
-                else None
-            ),
-            storage_git=(
-                str(form.get("storage_git", "")).strip()
-                if form_flag(form, "git_enabled")
-                else None
-            ),
+            storage_local=_enabled_form_value(form, "local_enabled", "storage_local"),
+            storage_git=_enabled_form_value(form, "git_enabled", "storage_git"),
         )
     if action == "storage":
         config = load_config(runtime.config_path, runtime.host_override)
         return OperationRequest(
             "storage",
             host=config["_host"],
-            storage_local=(
-                str(form.get("storage_local", "")).strip()
-                if form_flag(form, "local_enabled")
-                else None
-            ),
-            storage_git=(
-                str(form.get("storage_git", "")).strip()
-                if form_flag(form, "git_enabled")
-                else None
-            ),
+            storage_local=_enabled_form_value(form, "local_enabled", "storage_local"),
+            storage_git=_enabled_form_value(form, "git_enabled", "storage_git"),
         )
     if action not in ("backup", "restore"):
         raise AgentBoxError("Choose a backup, restore, storage, or provider operation")
@@ -616,8 +604,9 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
         config, hosts = runtime.available_hosts()
         local_root = config["_storage_local"]
         git_url = config["_storage_git_url"]
-        form_git_url = redacted_git_url(git_url) if git_url is not None else ""
-        if git_url is not None and form_git_url != git_url:
+        display_git_url = redacted_git_url(git_url) if git_url is not None else None
+        form_git_url = display_git_url or ""
+        if form_git_url != git_url:
             form_git_url = ""
         if local_root is not None and git_url is not None:
             storage_label = "Local + Git"
@@ -632,15 +621,13 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
             "catalog_path": str(config["_catalog_root"]),
             "storage_label": storage_label,
             "local_storage_path": str(local_root) if local_root is not None else None,
-            "git_storage_url": redacted_git_url(git_url) if git_url is not None else None,
+            "git_storage_url": display_git_url,
             "git_storage_form_url": form_git_url,
             "default_local_storage_path": str(default_local_catalog()),
             "state_path": str(config["_state_file"]),
             "safety_path": str(config["_safety_backups"]),
-            "tool_names": sorted(config["tools"]),
             "hosts": hosts,
             "selected_host": selected_host,
-            "provider_options": provider_detection(config),
         }
 
     def onboarding_context(request: Request) -> dict:
@@ -666,12 +653,16 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
         }
 
     async def dashboard_context(request: Request, host: str | None) -> dict:
-        config = load_config(runtime.config_path, runtime.host_override)
-        selected_host = runtime.validate_host(host or config["_host"])
+        selected_host = runtime.validate_host(host or "")
         dashboard = await run_in_threadpool(runtime.dashboard, selected_host)
         context = base_context(request, selected_host)
         context.update(dashboard)
         return context
+
+    async def checked_form(request: Request):
+        form = await request.form()
+        checked_csrf(runtime, form.get("csrf_token"))
+        return form
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request, host: str | None = None):
@@ -714,8 +705,7 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
 
     @app.post("/updates/preview", response_class=HTMLResponse)
     async def preview_update(request: Request):
-        form = await request.form()
-        checked_csrf(runtime, form.get("csrf_token"))
+        form = await checked_form(request)
         try:
             plan = await run_in_threadpool(prepare_update_plan)
             token = runtime.store_update_preview(plan)
@@ -739,8 +729,7 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
 
     @app.post("/updates/execute", response_class=HTMLResponse)
     async def execute_update(request: Request):
-        form = await request.form()
-        checked_csrf(runtime, form.get("csrf_token"))
+        form = await checked_form(request)
         try:
             plan = runtime.consume_update_preview(str(form.get("preview_token", "")))
             result = await run_in_threadpool(runtime.install_reviewed_update, plan)
@@ -761,8 +750,7 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
 
     @app.post("/operations/preview", response_class=HTMLResponse)
     async def preview_operation(request: Request):
-        form = await request.form()
-        checked_csrf(runtime, form.get("csrf_token"))
+        form = await checked_form(request)
         context = {"request": request, "csrf_token": runtime.csrf_token}
         try:
             operation = operation_from_form(runtime, form)
@@ -793,8 +781,7 @@ def create_app(config_path: Path, host_override: str | None = None) -> FastAPI:
 
     @app.post("/operations/execute", response_class=HTMLResponse)
     async def execute_operation(request: Request):
-        form = await request.form()
-        checked_csrf(runtime, form.get("csrf_token"))
+        form = await checked_form(request)
         try:
             preview = runtime.consume_preview(str(form.get("preview_token", "")))
             job = runtime.start_job(preview)

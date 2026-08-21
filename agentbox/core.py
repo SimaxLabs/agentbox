@@ -695,7 +695,7 @@ def _git_revision(checkout: Path, url: str) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def _validate_managed_repository(checkout: Path, url: str) -> None:
+def _validate_managed_repository(checkout: Path) -> None:
     if any(path.is_file() or path.is_symlink() for path in checkout.rglob(".gitattributes")):
         raise AgentBoxError("Managed Git repositories must not define .gitattributes files")
     catalog = checkout / "catalog"
@@ -806,7 +806,7 @@ def _ensure_git_checkout(config: dict) -> tuple[str, str | None, bool]:
             _run_git(checkout, ("read-tree", "--reset", "-u", "HEAD"), url)
     elif local_revision is not None:
         pending = True
-    _validate_managed_repository(checkout, url)
+    _validate_managed_repository(checkout)
     revision = _git_revision(checkout, url)
     return branch, revision, pending
 
@@ -1471,7 +1471,7 @@ def commit_git_catalog(
         uncertain = False
         try:
             replace_catalog(source, git_root)
-            _validate_managed_repository(checkout, url)
+            _validate_managed_repository(checkout)
             _run_git(
                 checkout,
                 (
@@ -2464,14 +2464,18 @@ def _restore_file_snapshot(path: Path, snapshot: tuple[bool, bytes, int]) -> Non
             temporary.unlink()
 
 
-def _configured_storage_update(config_path: Path, request: OperationRequest) -> dict:
+def _requested_storage(request: OperationRequest) -> dict[str, str]:
     storage = {}
     if request.storage_local is not None:
         storage["local"] = request.storage_local.strip()
     if request.storage_git is not None:
         storage["git"] = request.storage_git.strip()
+    return storage
+
+
+def _configured_storage_update(config_path: Path, request: OperationRequest) -> dict:
     candidate = load_json(config_path, {})
-    candidate["storage"] = storage
+    candidate["storage"] = _requested_storage(request)
     _parse_storage(candidate, config_path.parent)
     return candidate
 
@@ -2519,15 +2523,7 @@ def _configured_provider_update(config_path: Path, request: OperationRequest) ->
         }
         for provider_id in definitions
     }
-    storage = {}
-    if request.storage_local is not None:
-        storage["local"] = request.storage_local.strip()
-    if request.storage_git is not None:
-        storage["git"] = request.storage_git.strip()
-    if storage:
-        candidate["storage"] = storage
-    else:
-        candidate.pop("storage", None)
+    candidate["storage"] = _requested_storage(request)
     _parse_storage(candidate, config_path.parent)
     return candidate
 
@@ -2560,7 +2556,7 @@ def configure_providers(
                 provider["id"],
             )
         )
-    storage = candidate.get("storage", {"local": str(default_local_catalog())})
+    storage = candidate["storage"]
     if "local" in storage:
         report(OperationEvent("storage-config", "LOCAL STORAGE {}".format(storage["local"])))
     if "git" in storage:
