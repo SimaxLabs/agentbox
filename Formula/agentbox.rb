@@ -1,26 +1,26 @@
 class Agentbox < Formula
   desc "Back up and restore AI coding-agent resources"
   homepage "https://github.com/SimaxLabs/agentbox"
-  version "0.1.2"
+  version "0.1.3"
   license "GPL-3.0-only"
 
   on_macos do
     depends_on arch: :arm64
-    url "https://github.com/SimaxLabs/agentbox/releases/download/v0.1.2/agentbox-0.1.2-macos-arm64.tar.gz"
-    sha256 "fd2cf862516935b8106d74f25f49d32a86d52801427278200312803696cf96cf"
+    url "https://github.com/SimaxLabs/agentbox/releases/download/v0.1.3/agentbox-0.1.3-macos-arm64.tar.gz"
+    sha256 "f80db9b8c757f7339f66feb03cf76307614834cccb1e8398a8373e3983fb37eb"
   end
 
   on_linux do
     on_intel do
       depends_on arch: :x86_64
-      url "https://github.com/SimaxLabs/agentbox/releases/download/v0.1.2/agentbox-0.1.2-linux-x86_64.tar.gz"
-      sha256 "69715b14d754dd27e1b69b96ac6adb28f5cb44bcc5fddc28bd4cf698829905df"
+      url "https://github.com/SimaxLabs/agentbox/releases/download/v0.1.3/agentbox-0.1.3-linux-x86_64.tar.gz"
+      sha256 "91e73c8574de4b40900361294d4e04cbfde36f6ef61bf434a60726e05619c357"
     end
 
     on_arm do
       depends_on arch: :arm64
-      url "https://github.com/SimaxLabs/agentbox/releases/download/v0.1.2/agentbox-0.1.2-linux-arm64.tar.gz"
-      sha256 "457fa6f7ce9b93a8a3d882533bc09dfde97ffd379010abdc3a4ed272db928ec0"
+      url "https://github.com/SimaxLabs/agentbox/releases/download/v0.1.3/agentbox-0.1.3-linux-arm64.tar.gz"
+      sha256 "67fab0c1ccbb16523d6f273b1629de821e318d4d37ba1c53548471f490eefeff"
     end
   end
 
@@ -31,6 +31,6 @@ class Agentbox < Formula
   end
 
   test do
-    assert_match "AgentBox v0.1.2", shell_output("#{bin}/agentbox --version")
+    assert_match "AgentBox v0.1.3", shell_output("#{bin}/agentbox --version")
   end
 end
